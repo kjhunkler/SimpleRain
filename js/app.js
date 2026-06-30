@@ -5,7 +5,7 @@ const AUTO_CHANNEL = "simple-rain";
 const GAME_SAVE_KEY = "simplerain-host-cache";
 const PLAYER_HEARTBEAT_MS = 15000;
 const COLORS = ["#ff5d5d", "#ff9d4d", "#ffd24d", "#7CFC9B", "#33ddaa", "#4dd2ff", "#4d8bff", "#7766ff", "#c98cff", "#ff6fd0", "#22cc88", "#ff6600"];
-const ICONS = ["Rain", "Frog", "Lotus", "Turtle", "Koi", "Duck", "Bug", "Sky", "Star", "Moon"];
+const ICONS = ["🌧️", "🐸", "🪷", "🐢", "🐟", "🦆", "🦋", "🌈", "⭐", "🌙"];
 
 const $ = (sel) => document.querySelector(sel);
 const screens = { loading: $("#screen-loading"), play: $("#screen-play") };
@@ -84,8 +84,8 @@ function setStatus(text) {
   if (el) el.textContent = text;
 }
 
-function iconInitial(icon) {
-  return String(icon || "Rain").slice(0, 1).toUpperCase();
+function displayIcon(icon) {
+  return icon || "🌧️";
 }
 
 function pickColor() {
@@ -118,7 +118,7 @@ function currentHostId() {
 }
 
 function hostCrown(id) {
-  return id && id === currentHostId() ? "Host " : "";
+  return id && id === currentHostId() ? "👑 " : "";
 }
 
 function getVisiblePlayers() {
@@ -132,11 +132,9 @@ function renderPlayers() {
   list.innerHTML = "";
   for (const player of visible) {
     const li = document.createElement("li");
-    li.innerHTML = `<span class="swatch" style="background:${player.color}">${esc(iconInitial(player.icon))}</span>${hostCrown(player.id)}${esc(player.name)}`;
+    li.innerHTML = `<span class="swatch" style="background:${player.color}">${esc(displayIcon(player.icon))}</span>${hostCrown(player.id)}${esc(player.name)}`;
     list.appendChild(li);
   }
-  $("#player-count").textContent = String(visible.length);
-  $("#role-label").textContent = net.isHost ? "Hosting" : "Joined";
 }
 
 function loadCachedGameState() {
@@ -233,7 +231,7 @@ function updateProfilePreview() {
   const dot = $("#preview-dot");
   if (dot) {
     dot.style.background = color;
-    dot.textContent = iconInitial(profile.icon);
+    dot.textContent = displayIcon(profile.icon);
     dot.title = profile.icon;
   }
   const name = $("#preview-name");
@@ -269,7 +267,7 @@ function buildIconPicker() {
     const btn = document.createElement("button");
     btn.className = "icon-opt" + (icon === profile.icon ? " selected" : "");
     btn.type = "button";
-    btn.textContent = iconInitial(icon);
+    btn.textContent = displayIcon(icon);
     btn.title = icon;
     btn.setAttribute("aria-label", icon);
     btn.addEventListener("click", () => {

@@ -685,10 +685,10 @@
       const seed = tileSeed(`${id}-${cosmeticSeed}`);
       const roll = seeded(seed, 3);
       addPondEntity("pad", cell, seed, 0, 0.00022, 0.065);
-      if (roll > 0.72) addPondEntity("koi", cell, seed, 1, 0.0010 + seeded(seed, 16) * 0.0014, 0.035);
-      else if (roll > 0.62) addPondEntity("shadow", cell, seed, 2, 0.004 + seeded(seed, 18) * 0.005, 0.025);
-      else if (roll > 0.42) addPondEntity("bug", cell, seed, 3, 0.0045, 0.030, seeded(seed, 19) > 0.55 ? "dragonfly" : "butterfly");
-      if (seeded(seed, 8) > 0.88) addPondEntity("turtle", cell, seed, 4, 0.0022 / 3, 0.045);
+      if (roll > 0.58) addPondEntity("koi", cell, seed, 1, 0.0010 + seeded(seed, 16) * 0.0014, 0.045);
+      else if (roll > 0.44) addPondEntity("shadow", cell, seed, 2, 0.004 + seeded(seed, 18) * 0.005, 0.032);
+      else if (roll > 0.22) addPondEntity("bug", cell, seed, 3, 0.0045, 0.038, seeded(seed, 19) > 0.55 ? "dragonfly" : "butterfly");
+      if (seeded(seed, 8) > 0.74) addPondEntity("turtle", cell, seed, 4, 0.0022 / 3, 0.055);
     }
 
     function addPondEntity(type, cell, seed, i, speed, radius, bugKind = null) {
@@ -1908,6 +1908,7 @@
     }
 
     function onKeyDown(e) {
+      if (e.target?.closest?.("input, textarea, select, [contenteditable='true']")) return;
       if (e.key === "r" || e.key === "R" || e.key === " ") { e.preventDefault(); rotateCurrent(); }
       else if (e.key === "d" || e.key === "D") { e.preventDefault(); sendAction({ type: "swap" }); }
       else if (e.key === "q" || e.key === "Q") { e.preventDefault(); view.rot -= Math.PI / 12; }

@@ -151,7 +151,7 @@ input, textarea, select {
   align-items: center;
   justify-content: center;
   color: #10202b;
-  font-size: 0.54rem;
+  font-size: 0.72rem;
   font-weight: 900;
 }
 
@@ -521,7 +521,7 @@ input, textarea, select {
   align-items: center;
   justify-content: center;
   color: #10202b;
-  font-size: 1.15rem;
+  font-size: 1.9rem;
   font-weight: 900;
   flex-shrink: 0;
 }
@@ -576,7 +576,7 @@ input, textarea, select {
 }
 .icon-opt {
   color: var(--text);
-  font-size: 0.8rem;
+  font-size: 1.55rem;
   font-weight: 800;
   height: 50px;
   border-radius: 12px;
