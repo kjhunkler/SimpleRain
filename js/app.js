@@ -1,11 +1,12 @@
 /* SimpleRain app shell: auto host/join, profile editing, host-owned game state. */
 
-const APP_VERSION = "1.0.7";
+const APP_VERSION = "1.0.8";
 const AUTO_CHANNEL = "simple-rain";
 const GAME_SAVE_KEY = "simplerain-host-cache";
 const MUSIC_MUTED_KEY = "simplerain-music-muted";
 const LOBBY_PARAM = "lobby";
 const PLAYER_HEARTBEAT_MS = 15000;
+const HOST_WATCHDOG_MS = Math.max(45000, PLAYER_HEARTBEAT_MS * 3);
 const COLORS = ["#ff5d5d", "#ff9d4d", "#ffd24d", "#7CFC9B", "#33ddaa", "#4dd2ff", "#4d8bff", "#7766ff", "#c98cff", "#ff6fd0", "#22cc88", "#ff6600"];
 const ICONS = ["🐸", "🐢", "🐟", "🦆", "🦋", "🐞", "🐝", "🦗", "🦎", "🐌", "🦀", "🦊", "🐰", "🦝", "🦉", "🐿️"];
 
@@ -17,11 +18,15 @@ const ctx = canvas.getContext("2d");
 let net = new PeerNet();
 let activeGame = null;
 let hostLoopTimer = null;
+let hostWatchdogTimer = null;
+let handoffTimer = null;
 let lastPlayersBroadcastAt = 0;
+let lastHostMessageAt = 0;
 let lastState = [];
 let lastHostOrder = [];
 let pendingGameState = null;
 let migratingFromHostId = null;
+let handoffInProgress = false;
 let statusText = "Starting SimpleRain...";
 let myColor = "";
 let nameTimer = null;
@@ -325,6 +330,8 @@ function newLobbyChannel() {
 function leaveLobby() {
   if (!confirm("Leave this lobby? Other players will stay in the current lobby.")) return;
   stopHostLoop();
+  stopHostWatchdog();
+  clearHandoffTimer();
   players.clear();
   peerMap.clear();
   usedColors.clear();
@@ -347,6 +354,9 @@ function leaveLobby() {
 function connectToLobby(channel, preferHost = false, openInviteWhenReady = false) {
   sessionChannel = normalizeLobbyChannel(channel);
   inLobby = true;
+  handoffInProgress = false;
+  clearHandoffTimer();
+  stopHostWatchdog();
   showInviteAfterReady = openInviteWhenReady;
   updateLobbyUrl();
   updateInvitePanel();
@@ -385,6 +395,7 @@ function ensureGameStarted(initialState = null) {
 
 function resetGame() {
   if (!confirm("Reset the current SimpleRain game for everyone?")) return;
+  closeProfileSheet();
   clearCachedGameState();
   if (net.isHost) {
     activeGame?.restart?.();
@@ -482,6 +493,46 @@ function stopHostLoop() {
   hostLoopTimer = null;
 }
 
+function clearHandoffTimer() {
+  clearTimeout(handoffTimer);
+  handoffTimer = null;
+}
+
+function markHostAlive() {
+  lastHostMessageAt = Date.now();
+}
+
+function startHostWatchdog() {
+  stopHostWatchdog();
+  markHostAlive();
+  hostWatchdogTimer = setInterval(() => {
+    if (!inLobby || net.isHost || !lastHostMessageAt) return;
+    if (Date.now() - lastHostMessageAt >= HOST_WATCHDOG_MS) beginHostHandoff("Host timed out. Rejoining...");
+  }, 5000);
+}
+
+function stopHostWatchdog() {
+  clearInterval(hostWatchdogTimer);
+  hostWatchdogTimer = null;
+  lastHostMessageAt = 0;
+}
+
+function beginHostHandoff(message) {
+  if (handoffInProgress || !inLobby) return;
+  handoffInProgress = true;
+  setStatus(message);
+  migratingFromHostId = lastHostOrder[0] || null;
+  pendingGameState = snapshotGame() || loadCachedGameState();
+  const remainingOrder = migratingFromHostId ? lastHostOrder.filter((id) => id !== migratingFromHostId) : [MY_ID];
+  const myIndex = remainingOrder.indexOf(MY_ID);
+  const preferHost = myIndex === 0;
+  const delay = myIndex < 0 ? 300 : myIndex * 700;
+  stopHostLoop();
+  stopHostWatchdog();
+  clearHandoffTimer();
+  handoffTimer = setTimeout(() => net.migrate(sessionChannel, preferHost), delay);
+}
+
 function queueStateForPeer(peerId) {
   let attempts = 0;
   const send = () => {
@@ -495,6 +546,9 @@ function queueStateForPeer(peerId) {
 function wireNetEvents() {
   net.on("ready", () => {
     inLobby = true;
+    handoffInProgress = false;
+    clearHandoffTimer();
+    stopHostWatchdog();
     setStatus("Hosting SimpleRain");
     players.clear();
     peerMap.clear();
@@ -525,8 +579,11 @@ function wireNetEvents() {
 
   net.on("connected", () => {
     inLobby = true;
+    handoffInProgress = false;
+    clearHandoffTimer();
     setStatus("Joined SimpleRain");
     net.send({ t: "hello", id: MY_ID, name: profile.name, icon: profile.icon, preferredColor: profile.color });
+    startHostWatchdog();
     ensureGameStarted(loadCachedGameState());
     show("play");
     updateInvitePanel();
@@ -552,26 +609,20 @@ function wireNetEvents() {
   });
 
   net.on("host-closed", () => {
-    setStatus("Host left. Rejoining...");
-    migratingFromHostId = lastHostOrder[0] || null;
-    pendingGameState = snapshotGame() || loadCachedGameState();
-    const remainingOrder = migratingFromHostId ? lastHostOrder.filter((id) => id !== migratingFromHostId) : [MY_ID];
-    const myIndex = remainingOrder.indexOf(MY_ID);
-    const preferHost = myIndex === 0;
-    const delay = myIndex < 0 ? 300 : myIndex * 700;
-    stopHostLoop();
-    setTimeout(() => net.migrate(sessionChannel, preferHost), delay);
+    beginHostHandoff("Host left. Rejoining...");
   });
 
   net.on("message", ({ from, data }) => {
+    if (from === "host") markHostAlive();
     if (net.isHost) handleHostMessage(from, data);
     else handleClientMessage(data);
   });
 
   net.on("error", (err) => {
     console.error(err);
+    if (!inLobby || handoffInProgress) return;
     setStatus("Connection issue. Retrying...");
-    setTimeout(() => net.migrate(sessionChannel, false), 1200);
+    beginHostHandoff("Connection issue. Rejoining...");
   });
 }
 

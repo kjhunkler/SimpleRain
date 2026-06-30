@@ -22,9 +22,19 @@
 const PREFIX = "bp2p-"; // namespaces our room codes on the shared public broker
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0/O/1/I/L ambiguity
 const CODE_LEN = 4;
+const HOST_CONNECT_TIMEOUT_MS = 8000;
 
 function peerOptions() {
-  return { debug: 0 };
+  return {
+    debug: 0,
+    config: {
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
+        { urls: "stun:stun.cloudflare.com:3478" }
+      ]
+    }
+  };
 }
 
 function makeCode() {
@@ -169,13 +179,14 @@ class PeerNet {
       this.hostConn = conn;
 
       // Safety net: host registered but not responding (e.g. stale broker slot
-      // from a recently-closed tab). Give it 2.5s then try to claim the host role.
+      // from a recently-closed tab). Wait long enough for slower mobile browsers
+      // before trying to claim the host role.
       const timer = setTimeout(() => {
         if (settled || this._closed) return;
         settled = true;
         peer.destroy();
         this._becomeHost(attempt);
-      }, 2500);
+      }, HOST_CONNECT_TIMEOUT_MS);
 
       conn.on("open", () => {
         if (settled || this._closed) return;
@@ -186,7 +197,15 @@ class PeerNet {
       });
       conn.on("data",  (data) => { if (!this._closed) this._emit("message", { from: "host", data }); });
       conn.on("close", ()     => { if (!this._closed) { this.hostConn = null; this._emit("host-closed"); } });
-      conn.on("error", (err) => { if (!this._closed) { this.hostConn = null; this._emit("error", err); } });
+      conn.on("error", (err) => {
+        if (settled || this._closed) return;
+        settled = true;
+        clearTimeout(timer);
+        this.hostConn = null;
+        peer.destroy();
+        this._becomeHost(attempt);
+        this._emit("error", err);
+      });
     });
 
     peer.on("error", (err) => {
