@@ -99,6 +99,32 @@ input, textarea, select {
 }
 .status { color: var(--accent2); min-height: 1.2em; margin: 4px 0 0; }
 
+.home-lobby-controls {
+  width: min(100%, 360px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: stretch;
+}
+
+.home-secondary-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.home-join-code {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+}
+
+.home-profile-btn {
+  position: fixed;
+  right: 16px;
+  top: max(16px, env(safe-area-inset-top));
+}
+
 /* ===== Lobby ===== */
 .code-big {
   font-size: 3rem;

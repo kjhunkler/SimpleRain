@@ -16,6 +16,19 @@
       <h1 class="title">Simple<span>Rain</span></h1>
       <p id="menu-version" class="menu-version"></p>
       <p id="connection-status" class="status">Finding a SimpleRain session...</p>
+      <div id="home-lobby-controls" class="home-lobby-controls hidden">
+        <button id="btn-play-global" class="btn btn-primary btn-big" type="button">Play</button>
+        <div class="home-secondary-actions">
+          <button id="btn-home-host-lobby" class="btn" type="button">Host</button>
+          <div class="home-join-code">
+            <input id="input-home-lobby-code" class="text-input" type="text" autocomplete="off" inputmode="text" placeholder="Invite code" aria-label="Invite code" />
+            <button id="btn-home-join-lobby" class="btn" type="button">Join</button>
+          </div>
+        </div>
+      </div>
+      <button id="btn-home-profile" class="profile-menu-btn home-profile-btn" aria-label="Edit profile" type="button">
+        <span id="home-profile-dot" class="menu-profile-dot"></span>
+      </button>
     </section>
 
     <section id="screen-play" class="screen">

@@ -1,6 +1,6 @@
 /* SimpleRain app shell: auto host/join, profile editing, host-owned game state. */
 
-const APP_VERSION = "1.0.6";
+const APP_VERSION = "1.0.7";
 const AUTO_CHANNEL = "simple-rain";
 const GAME_SAVE_KEY = "simplerain-host-cache";
 const MUSIC_MUTED_KEY = "simplerain-music-muted";
@@ -246,8 +246,11 @@ function updateInvitePanel() {
 function updateLobbyControls() {
   $("#lobby-active-controls")?.classList.toggle("hidden", !inLobby);
   $("#lobby-left-controls")?.classList.toggle("hidden", inLobby);
+  $("#home-lobby-controls")?.classList.toggle("hidden", inLobby);
   const code = $("#input-lobby-code");
   if (code && !code.value) code.value = sessionChannel;
+  const homeCode = $("#input-home-lobby-code");
+  if (homeCode && !homeCode.value) homeCode.value = sessionChannel;
 }
 
 async function copyInviteLink() {
@@ -288,10 +291,16 @@ function wireManageControls() {
   if (share) share.onclick = shareInviteLink;
   const host = $("#btn-host-lobby");
   if (host) host.onclick = hostNewLobby;
+  const homeHost = $("#btn-home-host-lobby");
+  if (homeHost) homeHost.onclick = hostNewLobby;
   const global = $("#btn-rejoin-global");
   if (global) global.onclick = rejoinGlobalLobby;
+  const play = $("#btn-play-global");
+  if (play) play.onclick = rejoinGlobalLobby;
   const join = $("#btn-join-lobby");
   if (join) join.onclick = joinLobbyFromCode;
+  const homeJoin = $("#btn-home-join-lobby");
+  if (homeJoin) homeJoin.onclick = joinLobbyFromHomeCode;
 }
 
 function startGame(initialState = null) {
@@ -332,7 +341,7 @@ function leaveLobby() {
   setStatus("Not in a lobby");
   show("loading");
   updateLobbyControls();
-  openProfileSheet();
+  closeProfileSheet();
 }
 
 function connectToLobby(channel, preferHost = false, openInviteWhenReady = false) {
@@ -361,6 +370,11 @@ function rejoinGlobalLobby() {
 
 function joinLobbyFromCode() {
   const code = $("#input-lobby-code")?.value;
+  connectToLobby(code || AUTO_CHANNEL, false, false);
+}
+
+function joinLobbyFromHomeCode() {
+  const code = $("#input-home-lobby-code")?.value;
   connectToLobby(code || AUTO_CHANNEL, false, false);
 }
 
@@ -416,6 +430,12 @@ function updateProfilePreview() {
     menuDot.style.background = color;
     menuDot.textContent = displayIcon(profile.icon);
     menuDot.title = profile.name;
+  }
+  const homeDot = $("#home-profile-dot");
+  if (homeDot) {
+    homeDot.style.background = color;
+    homeDot.textContent = displayIcon(profile.icon);
+    homeDot.title = profile.name;
   }
 }
 
@@ -681,6 +701,7 @@ function esc(s) {
 }
 
 $("#btn-profile")?.addEventListener("click", openProfileSheet);
+$("#btn-home-profile")?.addEventListener("click", openProfileSheet);
 $("#btn-close-profile")?.addEventListener("click", closeProfileSheet);
 $("#input-name")?.addEventListener("input", (event) => {
   profile.name = event.target.value.trim() || DEFAULT_NAME;
