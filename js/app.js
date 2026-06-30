@@ -1,9 +1,9 @@
 /* SimpleRain app shell: auto host/join, profile editing, host-owned game state. */
 
-const APP_VERSION = "1.0";
+const APP_VERSION = "1.0.1";
 const AUTO_CHANNEL = "simple-rain";
 const GAME_SAVE_KEY = "simplerain-host-cache";
-const TICK_HZ = 8;
+const PLAYER_HEARTBEAT_MS = 15000;
 const COLORS = ["#ff5d5d", "#ff9d4d", "#ffd24d", "#7CFC9B", "#33ddaa", "#4dd2ff", "#4d8bff", "#7766ff", "#c98cff", "#ff6fd0", "#22cc88", "#ff6600"];
 const ICONS = ["Rain", "Frog", "Lotus", "Turtle", "Koi", "Duck", "Bug", "Sky", "Star", "Moon"];
 
@@ -15,6 +15,7 @@ const ctx = canvas.getContext("2d");
 let net = new PeerNet();
 let activeGame = null;
 let hostLoopTimer = null;
+let lastPlayersBroadcastAt = 0;
 let lastState = [];
 let lastHostOrder = [];
 let pendingGameState = null;
@@ -35,6 +36,19 @@ function clientId() {
     localStorage.setItem("simplerain-client-id", id);
   }
   return id;
+}
+
+function broadcastPlayers(force = false) {
+  if (!net.isHost) return;
+  const now = Date.now();
+  if (!force && now - lastPlayersBroadcastAt < PLAYER_HEARTBEAT_MS) return;
+  const state = [...players.values()];
+  const hostOrder = [...players.keys()];
+  lastState = state;
+  lastHostOrder = hostOrder;
+  lastPlayersBroadcastAt = now;
+  net.broadcast({ t: "players", players: state, hostOrder });
+  renderPlayers();
 }
 
 function randomIcon() {
@@ -282,7 +296,7 @@ function broadcastProfile() {
     myColor = me.color;
     profiles.set(MY_ID, { name: me.name, color: me.color, icon: me.icon });
     net.broadcast({ t: "profile", id: MY_ID, name: me.name, color: me.color, icon: me.icon });
-    net.broadcast({ t: "players", players: [...players.values()], hostOrder: [...players.keys()] });
+    broadcastPlayers(true);
     activeGame?.onPlayerList?.();
     renderPlayers();
   } else {
@@ -304,14 +318,8 @@ function handleGameState(state) {
 function startHostLoop() {
   clearInterval(hostLoopTimer);
   hostLoopTimer = setInterval(() => {
-    if (!net.isHost) return;
-    const state = [...players.values()];
-    const hostOrder = [...players.keys()];
-    lastState = state;
-    lastHostOrder = hostOrder;
-    net.broadcast({ t: "players", players: state, hostOrder });
-    renderPlayers();
-  }, 1000 / TICK_HZ);
+    broadcastPlayers(false);
+  }, PLAYER_HEARTBEAT_MS);
 }
 
 function stopHostLoop() {
@@ -374,6 +382,7 @@ function wireNetEvents() {
       saveCachedGameState(state);
       broadcastGameState(state);
     }
+    broadcastPlayers(true);
     renderPlayers();
   });
 
@@ -408,6 +417,7 @@ function handleHostMessage(peerId, msg) {
     net.sendTo(peerId, { t: "players", players: [...players.values()], hostOrder: [...players.keys()] });
     queueStateForPeer(peerId);
     activeGame?.onPlayerList?.();
+    broadcastPlayers(true);
     renderPlayers();
   } else if (msg.t === "game-input") {
     const id = peerMap.get(peerId);
@@ -424,7 +434,7 @@ function handleHostMessage(peerId, msg) {
     profiles.set(id, { name: player.name, color: player.color, icon: player.icon });
     net.sendTo(peerId, { t: "profile", id, name: player.name, color: player.color, icon: player.icon });
     net.broadcast({ t: "profile", id, name: player.name, color: player.color, icon: player.icon });
-    net.broadcast({ t: "players", players: [...players.values()], hostOrder: [...players.keys()] });
+    broadcastPlayers(true);
     activeGame?.onPlayerList?.();
     renderPlayers();
   } else if (msg.t === "reset-game") {

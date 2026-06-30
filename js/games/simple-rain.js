@@ -4,7 +4,7 @@
 (function () {
   "use strict";
 
-  const SNAPSHOT_HZ = 12;
+  const SNAPSHOT_HEARTBEAT_MS = 15000;
   const PERF_LOG_INTERVAL_MS = 5000;
   const TILE_VALIDATION_INTERVAL_MS = 2400;
   const ENJOYMENT_MESSAGE_CHANCE = 0.28;
@@ -1940,7 +1940,7 @@
       if (!lastTs) lastTs = ts;
       const frameMs = ts - lastTs;
       lastTs = ts;
-      if (isHost() && hasRemotePeers() && ts - lastSnapshotAt >= 1000 / SNAPSHOT_HZ) {
+      if (isHost() && hasRemotePeers() && ts - lastSnapshotAt >= SNAPSHOT_HEARTBEAT_MS) {
         lastSnapshotAt = ts;
         host.broadcastState(timedSnapshot());
       }
