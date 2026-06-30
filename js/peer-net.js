@@ -23,6 +23,10 @@ const PREFIX = "bp2p-"; // namespaces our room codes on the shared public broker
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0/O/1/I/L ambiguity
 const CODE_LEN = 4;
 
+function peerOptions() {
+  return { debug: 0 };
+}
+
 function makeCode() {
   let s = "";
   for (let i = 0; i < CODE_LEN; i++) {
@@ -73,7 +77,7 @@ class PeerNet {
     const tryCode = (attemptsLeft) => {
       if (this._closed) return;
       const code = makeCode();
-      const peer = new Peer(PREFIX + code, { debug: 1 });
+      const peer = new Peer(PREFIX + code, peerOptions());
       this.peer = peer;
 
       peer.on("open", () => {
@@ -155,7 +159,7 @@ class PeerNet {
     if (attempt > 10) { this._emit("error", { type: "election-failed" }); return; }
 
     this.isHost = false;
-    const peer = new Peer({ debug: 1 });
+    const peer = new Peer(peerOptions());
     this.peer = peer;
     let settled = false;
 
@@ -201,7 +205,7 @@ class PeerNet {
   _becomeHost(attempt = 0) {
     if (this._closed) return;
     this.isHost = true;
-    const peer = new Peer(this._autoId, { debug: 1 });
+    const peer = new Peer(this._autoId, peerOptions());
     this.peer = peer;
 
     peer.on("open", () => { if (!this._closed) this._emit("ready"); });
@@ -227,7 +231,7 @@ class PeerNet {
     this._closed = false;
     this.isHost = false;
     this.code = code;
-    const peer = new Peer({ debug: 1 }); // random id assigned by the broker
+    const peer = new Peer(peerOptions()); // random id assigned by the broker
     this.peer = peer;
 
     peer.on("open", () => {
