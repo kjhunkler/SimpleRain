@@ -1,0 +1,25 @@
+{
+    "name": "Simple Games",
+    "short_name": "Simple Games",
+    "description": "A pocket arcade of touch-friendly mini games. Works offline!",
+    "start_url": "./index.html",
+    "scope": "./",
+    "display": "standalone",
+    "orientation": "portrait-primary",
+    "background_color": "#12121f",
+    "theme_color": "#12121f",
+    "icons": [
+        {
+            "src": "icons/icon.svg",
+            "sizes": "any",
+            "type": "image/svg+xml",
+            "purpose": "any"
+        },
+        {
+            "src": "icons/icon-maskable.svg",
+            "sizes": "any",
+            "type": "image/svg+xml",
+            "purpose": "maskable"
+        }
+    ]
+}

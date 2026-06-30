@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#0e1f14" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <title>Bug Hunt</title>
+    <style>
+        html, body {
+            margin: 0;
+            width: 100%;
+            height: 100%;
+            background: #0e1f14;
+            overflow: hidden;
+            overscroll-behavior: none;
+            touch-action: none;
+            -webkit-user-select: none;
+            user-select: none;
+            font-family: system-ui, sans-serif;
+        }
+        #game-stage {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            height: 100dvh;
+        }
+        #game-canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-stage">
+        <canvas id="game-canvas"></canvas>
+    </div>
+
+    <!-- This page is intentionally NOT a PWA: Bug Hunt needs the live server,
+         so a cached/offline shell would only get in the way. Drop any service
+         worker that a previous visit to this origin may have registered. -->
+    <script>
+        if ("serviceWorker" in navigator) {
+            navigator.serviceWorker.getRegistrations()
+                .then(function (regs) { regs.forEach(function (r) { r.unregister(); }); })
+                .catch(function () { /* fine */ });
+        }
+        // Prevent iOS double-tap zoom.
+        let lastTouchEnd = 0;
+        document.addEventListener("touchend", function (e) {
+            const now = Date.now();
+            if (now - lastTouchEnd <= 320) e.preventDefault();
+            lastTouchEnd = now;
+        }, { passive: false });
+    </script>
+
+    <script src="js/sound.js"></script>
+    <script src="js/storage.js"></script>
+    <script src="js/games/bughunt.js"></script>
+    <script>
+        (function () {
+            const canvas = document.getElementById("game-canvas");
+            const host = {
+                canvas: canvas,
+                kids: false,
+                setScore: function () { /* no scoreboard in standalone mode */ },
+                vibrate: function (p) { if (navigator.vibrate) navigator.vibrate(p); },
+                gameOver: function () { /* Bug Hunt manages its own win banner */ }
+            };
+
+            // Mobile browsers need a user gesture before audio can start.
+            const unlock = function () { if (window.SGSound) SGSound.unlock(); };
+            document.addEventListener("touchstart", unlock, { once: true, passive: true });
+            document.addEventListener("mousedown", unlock, { once: true });
+
+            const game = SGGames.bughunt.create(host);
+            game.start();
+        })();
+    </script>
+</body>
+</html>
