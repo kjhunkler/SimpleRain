@@ -4,7 +4,7 @@
 (function () {
   "use strict";
 
-  const SNAPSHOT_HEARTBEAT_MS = 15000;
+  const SNAPSHOT_HEARTBEAT_MS = 2500;
   const PERF_LOG_INTERVAL_MS = 5000;
   const TILE_VALIDATION_INTERVAL_MS = 2400;
   const ENJOYMENT_MESSAGE_CHANCE = 0.28;
@@ -1927,9 +1927,13 @@
       }
       if (pointIn(ui.board, p.x, p.y)) {
         e.preventDefault();
-        const t = now();
-        if (t - lastTapAt < 320) resetBoardView();
-        lastTapAt = t;
+        if (activePointers.size === 1 && (!e.touches || e.touches.length <= 1)) {
+          const t = now();
+          if (t - lastTapAt < 320) resetBoardView();
+          lastTapAt = t;
+        } else {
+          lastTapAt = 0;
+        }
         startBoardGesture();
       }
     }

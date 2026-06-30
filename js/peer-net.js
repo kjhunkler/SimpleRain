@@ -54,6 +54,17 @@ class PeerNet {
     if (set) for (const fn of set) fn(payload);
   }
 
+  _safeSend(conn, msg) {
+    if (!conn || !conn.open) return false;
+    try {
+      conn.send(msg);
+      return true;
+    } catch (err) {
+      this._emit("error", err);
+      return false;
+    }
+  }
+
   /* ----- HOST ----- */
   // Registers under a fresh room code; retries if the code is already taken.
   host() {
@@ -101,6 +112,12 @@ class PeerNet {
         if (this._closed) return;
         this.conns.delete(conn.peer);
         this._emit("peer-leave", conn.peer);
+      });
+      conn.on("error", (err) => {
+        if (this._closed) return;
+        this.conns.delete(conn.peer);
+        this._emit("peer-leave", conn.peer);
+        this._emit("error", err);
       });
     });
     this._acceptMediaCalls(peer);
@@ -164,7 +181,8 @@ class PeerNet {
         this._emit("connected");
       });
       conn.on("data",  (data) => { if (!this._closed) this._emit("message", { from: "host", data }); });
-      conn.on("close", ()     => { if (!this._closed) this._emit("host-closed"); });
+      conn.on("close", ()     => { if (!this._closed) { this.hostConn = null; this._emit("host-closed"); } });
+      conn.on("error", (err) => { if (!this._closed) { this.hostConn = null; this._emit("error", err); } });
     });
 
     peer.on("error", (err) => {
@@ -222,7 +240,8 @@ class PeerNet {
         this._emit("connected");
       });
       conn.on("data", (data) => { if (!this._closed) this._emit("message", { from: "host", data }); });
-      conn.on("close", () => { if (!this._closed) this._emit("host-closed"); });
+      conn.on("close", () => { if (!this._closed) { this.hostConn = null; this._emit("host-closed"); } });
+      conn.on("error", (err) => { if (!this._closed) { this.hostConn = null; this._emit("error", err); } });
     });
 
     peer.on("error", (err) => { if (!this._closed) this._emit("error", err); });
@@ -232,19 +251,19 @@ class PeerNet {
   // Host -> every client.
   broadcast(msg) {
     for (const conn of this.conns.values()) {
-      if (conn.open) conn.send(msg);
+      this._safeSend(conn, msg);
     }
   }
 
   // Host -> one client.
   sendTo(peerId, msg) {
     const conn = this.conns.get(peerId);
-    if (conn && conn.open) conn.send(msg);
+    this._safeSend(conn, msg);
   }
 
   // Client -> host.
   send(msg) {
-    if (this.hostConn && this.hostConn.open) this.hostConn.send(msg);
+    this._safeSend(this.hostConn, msg);
   }
 
   call(peerId, stream) {
