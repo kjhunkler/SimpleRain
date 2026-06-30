@@ -5,7 +5,7 @@ const AUTO_CHANNEL = "simple-rain";
 const GAME_SAVE_KEY = "simplerain-host-cache";
 const PLAYER_HEARTBEAT_MS = 15000;
 const COLORS = ["#ff5d5d", "#ff9d4d", "#ffd24d", "#7CFC9B", "#33ddaa", "#4dd2ff", "#4d8bff", "#7766ff", "#c98cff", "#ff6fd0", "#22cc88", "#ff6600"];
-const ICONS = ["🌧️", "🐸", "🪷", "🐢", "🐟", "🦆", "🦋", "🌈", "⭐", "🌙"];
+const ICONS = ["🐸", "🐢", "🐟", "🦆", "🦋", "🐞", "🐝", "🦗", "🦎", "🐌", "🦀", "🦊", "🐰", "🦝", "🦉", "🐿️"];
 
 const $ = (sel) => document.querySelector(sel);
 const screens = { loading: $("#screen-loading"), play: $("#screen-play") };
@@ -85,7 +85,7 @@ function setStatus(text) {
 }
 
 function displayIcon(icon) {
-  return icon || "🌧️";
+  return icon || "🐸";
 }
 
 function firstEmoji(value) {
@@ -118,15 +118,6 @@ function addPlayer(id, name, peerId, icon, preferredColor) {
   return player;
 }
 
-function currentHostId() {
-  if (lastHostOrder[0]) return lastHostOrder[0];
-  return net.isHost ? MY_ID : null;
-}
-
-function hostCrown(id) {
-  return id && id === currentHostId() ? "👑 " : "";
-}
-
 function getVisiblePlayers() {
   return net.isHost ? [...players.values()] : lastState;
 }
@@ -138,7 +129,7 @@ function renderPlayers() {
   list.innerHTML = "";
   for (const player of visible) {
     const li = document.createElement("li");
-    li.innerHTML = `<span class="swatch" style="background:${player.color}">${esc(displayIcon(player.icon))}</span>${hostCrown(player.id)}${esc(player.name)}`;
+    li.innerHTML = `<span class="swatch" style="background:${player.color}">${esc(displayIcon(player.icon))}</span>${esc(player.name)}`;
     list.appendChild(li);
   }
 }
@@ -175,8 +166,6 @@ function gameHostApi() {
     getPlayers: () => getVisiblePlayers(),
     getProfile: (id) => profiles.get(id),
     isSpeaking: () => false,
-    isCurrentHost: (id) => id && id === currentHostId(),
-    hostCrown,
     sendInput: (input) => net.send({ t: "game-input", input }),
     broadcastState: (state) => {
       if (!net.isHost) return;
@@ -244,6 +233,12 @@ function updateProfilePreview() {
   }
   const name = $("#preview-name");
   if (name) name.textContent = profile.name;
+  const menuDot = $("#menu-profile-dot");
+  if (menuDot) {
+    menuDot.style.background = color;
+    menuDot.textContent = displayIcon(profile.icon);
+    menuDot.title = profile.name;
+  }
 }
 
 function broadcastProfile() {

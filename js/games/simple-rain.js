@@ -359,6 +359,23 @@
       return [0, 1, 2, 3].map((i) => tile.edges[(i - r + 4) % 4]);
     }
 
+    function normalizedTileRot(rot) {
+      return ((Math.round(rot || 0) % 4) + 4) % 4;
+    }
+
+    function boardQuarterTurns() {
+      return normalizedTileRot(view.rot / (Math.PI / 2));
+    }
+
+    function placementRotationForView(current = currentFor()) {
+      if (!current) return 0;
+      return normalizedTileRot((current.rot || 0) - boardQuarterTurns());
+    }
+
+    function currentForPlacementView(current = currentFor()) {
+      return current ? { ...current, rot: placementRotationForView(current) } : null;
+    }
+
     function cellEdges(cell) { return rotatedEdges(cell.tile, cell.rot || 0); }
 
     function legalAt(x, y, current = currentFor()) {
@@ -417,10 +434,11 @@
       }
     }
 
-    function placeTile(id, x, y) {
+    function placeTile(id, x, y, rotOverride = null) {
       const current = currentFor(id);
-      if (!current || state.over || !legalAt(x, y, current)) return;
-      state.board[key(x, y)] = { tile: current.tile, rot: current.rot || 0, owner: id, turn: state.turn++ };
+      const placement = current && rotOverride !== null ? { ...current, rot: normalizedTileRot(rotOverride) } : current;
+      if (!placement || state.over || !legalAt(x, y, placement)) return;
+      state.board[key(x, y)] = { tile: placement.tile, rot: placement.rot || 0, owner: id, turn: state.turn++ };
       const p = boardToNorm(x, y);
       emitEvent("place", p.x, p.y, "#dff9ff");
       tryCompleteSquares(x, y);
@@ -460,7 +478,7 @@
         current.rot = ((current.rot || 0) + 1) % 4;
         state.message = "The tile turns softly in your hands.";
       } else if (input.type === "place") {
-        placeTile(id, Math.round(input.x), Math.round(input.y));
+        placeTile(id, Math.round(input.x), Math.round(input.y), input.rot ?? null);
         if (id === myId) startDrawAnimation(currentFor(id)?.tile);
       } else if (input.type === "swap") {
         swapTile(id);
@@ -1048,13 +1066,13 @@
       const p = profile(owner);
       ctx.fillStyle = p.color || "#ffffff";
       ctx.beginPath();
-      ctx.arc(x + size * 0.82, y + size * 0.18, size * 0.105, 0, Math.PI * 2);
+      ctx.arc(x + size * 0.86, y + size * 0.14, size * 0.065, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = "#10202b";
-      ctx.font = `${Math.max(10, size * 0.13)}px serif`;
+      ctx.font = `${Math.max(7, size * 0.08)}px serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(p.icon || "●", x + size * 0.82, y + size * 0.18);
+      ctx.fillText(p.icon || "●", x + size * 0.86, y + size * 0.14);
     }
 
     function drawTileBack(x, y, size, alpha = 1) {
@@ -1471,8 +1489,9 @@
 
     function drawBoard() {
       const current = currentFor();
-      const legal = new Set(legalCellsFor(current).map((p) => key(p.x, p.y)));
-      const hoverKey = drag?.hover && legalAt(drag.hover.x, drag.hover.y, current) ? key(drag.hover.x, drag.hover.y) : null;
+      const placementCurrent = currentForPlacementView(current);
+      const legal = new Set(legalCellsFor(placementCurrent).map((p) => key(p.x, p.y)));
+      const hoverKey = drag?.hover && legalAt(drag.hover.x, drag.hover.y, placementCurrent) ? key(drag.hover.x, drag.hover.y) : null;
       ctx.save();
       ctx.fillStyle = "rgba(227,249,255,0.045)";
       drawRoundRect(ui.board.x, ui.board.y, ui.board.w, ui.board.h, 22);
@@ -1510,7 +1529,7 @@
         ctx.fill();
         ctx.stroke();
         ctx.restore();
-        if (current?.tile) drawBoardTile(current.tile, current.rot || 0, p.x, p.y, ui.view.scale - 2, 0.28, null);
+        if (placementCurrent?.tile) drawBoardTile(placementCurrent.tile, placementCurrent.rot || 0, p.x, p.y, ui.view.scale - 2, 0.28, null);
       }
 
       for (const b of state.blossoms) {
@@ -1892,7 +1911,7 @@
       const p = pointerPoint(e);
       const moved = drag ? Math.hypot(p.x - drag.startX, p.y - drag.startY) : 0;
       if (drag && pointIn(ui.deck, p.x, p.y)) sendAction({ type: "swap" });
-      else if (hover && legalAt(hover.x, hover.y)) sendAction({ type: "place", x: hover.x, y: hover.y });
+      else if (hover && legalAt(hover.x, hover.y, currentForPlacementView())) sendAction({ type: "place", x: hover.x, y: hover.y, rot: placementRotationForView() });
       else if (drag && moved < 8 && pointIn(ui.handTile, p.x, p.y)) rotateCurrent();
       drag = null;
       if (activePointerId !== null && canvas.hasPointerCapture?.(activePointerId)) canvas.releasePointerCapture(activePointerId);
