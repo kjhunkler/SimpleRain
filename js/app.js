@@ -416,7 +416,7 @@ function closeProfileSheet() {
 }
 
 function updateProfilePreview() {
-  const color = myColor || profile.color || COLORS[0];
+  const color = profile.color || myColor || COLORS[0];
   const dot = $("#preview-dot");
   if (dot) {
     dot.style.background = color;
@@ -713,7 +713,9 @@ $("#input-name")?.addEventListener("input", (event) => {
 });
 $("#input-color")?.addEventListener("input", (event) => {
   profile.color = event.target.value || COLORS[0];
+  if (!inLobby) myColor = profile.color;
   localStorage.setItem("simplerain-color", profile.color);
+  profiles.set(MY_ID, { ...profiles.get(MY_ID), color: profile.color });
   updateProfilePreview();
   broadcastProfile();
 });
