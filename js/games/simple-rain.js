@@ -55,6 +55,8 @@
     let lastCssHeight = 0;
     let activePointerId = null;
     let audioCtx = null;
+    let musicTimer = null;
+    let musicStep = 0;
     let eventSeq = 0;
     let seenEventSeq = 0;
     let ui = { board: null, hand: null, handTile: null, deck: null, reset: null, cells: new Map(), scale: 1 };
@@ -125,6 +127,60 @@
           osc.stop(t + dur);
         }
       } catch {}
+    }
+
+    function ensureAudio() {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+      return audioCtx;
+    }
+
+    function noteFreq(note) {
+      return 440 * Math.pow(2, (note - 69) / 12);
+    }
+
+    function playMusicTone(freq, start, dur, vol, type = "sine") {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, start);
+      osc.frequency.exponentialRampToValueAtTime(freq * 0.996, start + dur);
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(vol, start + 0.18);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(start);
+      osc.stop(start + dur + 0.05);
+    }
+
+    function playMusicStep() {
+      try {
+        ensureAudio();
+        const t = audioCtx.currentTime + 0.03;
+        const melody = [69, 72, 76, 74, 72, 67, 64, null, 67, 71, 74, 72, 69, 64, 62, null];
+        const bass = [45, null, 52, null, 48, null, 55, null, 43, null, 50, null, 48, null, 52, null];
+        const note = melody[musicStep % melody.length];
+        const root = bass[musicStep % bass.length];
+        if (note !== null) playMusicTone(noteFreq(note), t, 1.85, 0.010, "sine");
+        if (root !== null) {
+          playMusicTone(noteFreq(root), t, 2.8, 0.007, "triangle");
+          playMusicTone(noteFreq(root + 7), t + 0.06, 2.4, 0.004, "sine");
+        }
+        musicStep++;
+      } catch {}
+    }
+
+    function startMusic() {
+      if (musicTimer) return;
+      playMusicStep();
+      musicTimer = setInterval(playMusicStep, 1650);
+    }
+
+    function stopMusic() {
+      if (!musicTimer) return;
+      clearInterval(musicTimer);
+      musicTimer = null;
     }
 
     function emitEvent(kind, x = 0.5, y = 0.5, color = "#ffffff") {
@@ -1850,6 +1906,7 @@
     }
 
     function onPointerDown(e) {
+      startMusic();
       const p = pointerPoint(e);
       const pointerId = e.pointerId ?? "mouse";
       activePointers.set(pointerId, pointerEntry(e));
@@ -2011,6 +2068,7 @@
       },
       destroy() {
         cancelAnimationFrame(rafId);
+        stopMusic();
         if (activePointerId !== null && canvas.hasPointerCapture?.(activePointerId)) canvas.releasePointerCapture(activePointerId);
         activePointerId = null;
         window.removeEventListener("resize", resize);
