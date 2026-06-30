@@ -1,12 +1,13 @@
 /* SimpleRain app shell: auto host/join, profile editing, host-owned game state. */
 
-const APP_VERSION = "1.0.8";
+const APP_VERSION = "1.0.9";
 const AUTO_CHANNEL = "simple-rain";
 const GAME_SAVE_KEY = "simplerain-host-cache";
 const MUSIC_MUTED_KEY = "simplerain-music-muted";
 const LOBBY_PARAM = "lobby";
 const PLAYER_HEARTBEAT_MS = 15000;
 const HOST_WATCHDOG_MS = Math.max(45000, PLAYER_HEARTBEAT_MS * 3);
+const CLIENT_WELCOME_TIMEOUT_MS = 10000;
 const COLORS = ["#ff5d5d", "#ff9d4d", "#ffd24d", "#7CFC9B", "#33ddaa", "#4dd2ff", "#4d8bff", "#7766ff", "#c98cff", "#ff6fd0", "#22cc88", "#ff6600"];
 const ICONS = ["🐸", "🐢", "🐟", "🦆", "🦋", "🐞", "🐝", "🦗", "🦎", "🐌", "🦀", "🦊", "🐰", "🦝", "🦉", "🐿️"];
 
@@ -20,6 +21,7 @@ let activeGame = null;
 let hostLoopTimer = null;
 let hostWatchdogTimer = null;
 let handoffTimer = null;
+let clientWelcomeTimer = null;
 let lastPlayersBroadcastAt = 0;
 let lastHostMessageAt = 0;
 let lastState = [];
@@ -332,6 +334,7 @@ function leaveLobby() {
   stopHostLoop();
   stopHostWatchdog();
   clearHandoffTimer();
+  clearClientWelcomeTimer();
   players.clear();
   peerMap.clear();
   usedColors.clear();
@@ -356,6 +359,7 @@ function connectToLobby(channel, preferHost = false, openInviteWhenReady = false
   inLobby = true;
   handoffInProgress = false;
   clearHandoffTimer();
+  clearClientWelcomeTimer();
   stopHostWatchdog();
   showInviteAfterReady = openInviteWhenReady;
   updateLobbyUrl();
@@ -498,6 +502,11 @@ function clearHandoffTimer() {
   handoffTimer = null;
 }
 
+function clearClientWelcomeTimer() {
+  clearTimeout(clientWelcomeTimer);
+  clientWelcomeTimer = null;
+}
+
 function markHostAlive() {
   lastHostMessageAt = Date.now();
 }
@@ -520,6 +529,7 @@ function stopHostWatchdog() {
 function beginHostHandoff(message) {
   if (handoffInProgress || !inLobby) return;
   handoffInProgress = true;
+  clearClientWelcomeTimer();
   setStatus(message);
   migratingFromHostId = lastHostOrder[0] || null;
   pendingGameState = snapshotGame() || loadCachedGameState();
@@ -531,6 +541,14 @@ function beginHostHandoff(message) {
   stopHostWatchdog();
   clearHandoffTimer();
   handoffTimer = setTimeout(() => net.migrate(sessionChannel, preferHost), delay);
+}
+
+function startClientWelcomeTimer() {
+  clearClientWelcomeTimer();
+  clientWelcomeTimer = setTimeout(() => {
+    if (net.isHost || handoffInProgress || lastState.some((player) => player.id === MY_ID)) return;
+    beginHostHandoff("Host did not answer. Rejoining...");
+  }, CLIENT_WELCOME_TIMEOUT_MS);
 }
 
 function queueStateForPeer(peerId) {
@@ -548,6 +566,7 @@ function wireNetEvents() {
     inLobby = true;
     handoffInProgress = false;
     clearHandoffTimer();
+    clearClientWelcomeTimer();
     stopHostWatchdog();
     setStatus("Hosting SimpleRain");
     players.clear();
@@ -581,11 +600,11 @@ function wireNetEvents() {
     inLobby = true;
     handoffInProgress = false;
     clearHandoffTimer();
-    setStatus("Joined SimpleRain");
+    clearClientWelcomeTimer();
+    setStatus("Joining SimpleRain...");
     net.send({ t: "hello", id: MY_ID, name: profile.name, icon: profile.icon, preferredColor: profile.color });
     startHostWatchdog();
-    ensureGameStarted(loadCachedGameState());
-    show("play");
+    startClientWelcomeTimer();
     updateInvitePanel();
     updateLobbyControls();
   });
@@ -672,6 +691,13 @@ function handleClientMessage(msg) {
     lastState = msg.players || [];
     lastHostOrder = msg.hostOrder || [];
     for (const player of lastState) profiles.set(player.id, { name: player.name, color: player.color, icon: player.icon });
+    if (lastState.some((player) => player.id === MY_ID)) {
+      clearClientWelcomeTimer();
+      setStatus("Joined SimpleRain");
+      ensureGameStarted(loadCachedGameState());
+      show("play");
+      updateLobbyControls();
+    }
     renderPlayers();
   } else if (msg.t === "profile") {
     profiles.set(msg.id, { name: msg.name, color: msg.color, icon: msg.icon });
