@@ -93,7 +93,6 @@ function initialLobbyChannel() {
   } catch {
     return "";
   }
-  renderProfileShortcuts();
 }
 
 function applyProfileColor(color) {
@@ -132,6 +131,20 @@ function renderProfileShortcuts() {
       colors.appendChild(button);
     }
   }
+  const icons = $("#profile-icon-shortcuts");
+  if (icons) {
+    icons.innerHTML = "";
+    for (const icon of POND_ICON_SUGGESTIONS) {
+      const button = document.createElement("button");
+      button.className = "icon-shortcut";
+      button.classList.toggle("selected", profile.icon === icon);
+      button.type = "button";
+      button.textContent = icon;
+      button.onclick = () => applyProfileIcon(icon);
+      icons.appendChild(button);
+    }
+  }
+}
 
 function requestHostRole() {
   if (!inLobby || soloMode || net.isHost) return;
@@ -149,20 +162,6 @@ function requestHostRole() {
 function relinquishHostRole() {
   if (!inLobby || soloMode || !net.isHost) return;
   beginHostHandoff("Relinquishing host...");
-}
-  const icons = $("#profile-icon-shortcuts");
-  if (icons) {
-    icons.innerHTML = "";
-    for (const icon of POND_ICON_SUGGESTIONS) {
-      const button = document.createElement("button");
-      button.className = "icon-shortcut";
-      button.classList.toggle("selected", profile.icon === icon);
-      button.type = "button";
-      button.textContent = icon;
-      button.onclick = () => applyProfileIcon(icon);
-      icons.appendChild(button);
-    }
-  }
 }
 
 function flowerLobbyChannel(lobby) {
