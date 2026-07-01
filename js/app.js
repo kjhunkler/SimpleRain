@@ -1,6 +1,6 @@
 /* SimpleRain app shell: auto host/join, profile editing, host-owned game state. */
 
-const APP_VERSION = "1.1.2";
+const APP_VERSION = "1.1.3";
 const AUTO_CHANNEL = "simple-rain";
 const GAME_SAVE_KEY = "simplerain-host-cache";
 const MUSIC_MUTED_KEY = "simplerain-music-muted";
@@ -395,6 +395,31 @@ async function shareInviteLink() {
   location.href = `sms:?&body=${encodeURIComponent(text)}`;
 }
 
+function refreshCachedPwaFiles() {
+  const button = $("#btn-refresh-cache");
+  if (!navigator.serviceWorker?.controller) {
+    setStatus("PWA cache is not active yet. Reload once, then try again.");
+    return;
+  }
+
+  button?.setAttribute("disabled", "disabled");
+  setStatus("Refreshing cached PWA files...");
+  const channel = new MessageChannel();
+  const timeout = setTimeout(() => {
+    button?.removeAttribute("disabled");
+    setStatus("Cache refresh timed out. Try reloading.");
+  }, 12000);
+
+  channel.port1.onmessage = (event) => {
+    clearTimeout(timeout);
+    button?.removeAttribute("disabled");
+    if (event.data?.ok) setStatus(`Cached files refreshed. Version ${event.data.version || APP_VERSION} is ready.`);
+    else setStatus(`Cache refresh failed: ${event.data?.error || "unknown error"}`);
+  };
+
+  navigator.serviceWorker.controller.postMessage({ type: "REFRESH_APP_SHELL" }, [channel.port2]);
+}
+
 function wireManageControls() {
   const reset = $("#btn-reset");
   if (reset) reset.onclick = resetGame;
@@ -412,6 +437,8 @@ function wireManageControls() {
   if (solo) solo.onclick = startSoloGame;
   const refresh = $("#btn-refresh-lobbies");
   if (refresh) refresh.onclick = refreshFlowerLobbies;
+  const refreshCache = $("#btn-refresh-cache");
+  if (refreshCache) refreshCache.onclick = refreshCachedPwaFiles;
   const global = $("#btn-rejoin-global");
   if (global) global.onclick = rejoinGlobalLobby;
   const join = $("#btn-join-lobby");

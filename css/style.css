@@ -46,7 +46,7 @@ input, textarea, select {
 
 .title { font-size: 2.4rem; margin: 0; letter-spacing: -1px; }
 .title span { color: var(--accent); }
-.menu-version { color: var(--muted); font-size: 0.78rem; margin: -12px 0 0; }
+.menu-version { color: var(--muted); font-size: 0.78rem; margin: -10px 0 0; }
 .tagline { color: var(--muted); margin: 0 0 12px; }
 
 /* ===== Buttons ===== */
