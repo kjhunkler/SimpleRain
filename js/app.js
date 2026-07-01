@@ -1,9 +1,10 @@
 /* SimpleRain app shell: auto host/join, profile editing, host-owned game state. */
 
-const APP_VERSION = "1.1.8";
+const APP_VERSION = "1.1.9";
 const AUTO_CHANNEL = "simple-rain";
 const GAME_SAVE_KEY = "simplerain-host-cache";
 const MUSIC_MUTED_KEY = "simplerain-music-muted";
+const MUSIC_TRACKS_KEY = "simplerain-music-tracks";
 const LOBBY_PARAM = "lobby";
 const LOBBY_SCAN_TIMEOUT_MS = 2600;
 const LOBBY_REFRESH_COOLDOWN_MS = 4000;
@@ -58,7 +59,7 @@ let handoffInProgress = false;
 let statusText = "Starting SimpleRain...";
 let myColor = "";
 let nameTimer = null;
-let musicMuted = localStorage.getItem(MUSIC_MUTED_KEY) === "1";
+let selectedMusicTrackIds = loadSelectedMusicTracks();
 let sessionChannel = initialLobbyChannel();
 let showInviteAfterReady = false;
 let inLobby = false;
@@ -506,6 +507,33 @@ function setHostReachability(value) {
   else setStatus("Hosting SimpleRain - waiting for first connection");
 }
 
+function availableMusicTracks() {
+  return window.SimpleRainGame?.musicTracks || [];
+}
+
+function loadSelectedMusicTracks() {
+  const validIds = new Set(availableMusicTracks().map((track) => track.id));
+  try {
+    const saved = JSON.parse(localStorage.getItem(MUSIC_TRACKS_KEY) || "null");
+    if (Array.isArray(saved)) return saved.filter((id) => validIds.has(id));
+  } catch {}
+  if (localStorage.getItem(MUSIC_MUTED_KEY) === "1") return [];
+  const firstTrack = availableMusicTracks()[0];
+  return firstTrack ? [firstTrack.id] : [];
+}
+
+function saveSelectedMusicTracks() {
+  localStorage.setItem(MUSIC_TRACKS_KEY, JSON.stringify(selectedMusicTrackIds));
+  localStorage.setItem(MUSIC_MUTED_KEY, selectedMusicTrackIds.length ? "0" : "1");
+}
+
+function setSelectedMusicTracks(ids) {
+  const validIds = new Set(availableMusicTracks().map((track) => track.id));
+  selectedMusicTrackIds = [...new Set(ids)].filter((id) => validIds.has(id));
+  saveSelectedMusicTracks();
+  activeGame?.setMusicTracks?.(selectedMusicTrackIds);
+}
+
 function displayIcon(icon) {
   return icon || "🐸";
 }
@@ -628,7 +656,8 @@ function gameHostApi() {
     getPlayers: () => getVisiblePlayers(),
     getProfile: (id) => profiles.get(id),
     isSpeaking: () => false,
-    isMusicMuted: () => musicMuted,
+    isMusicMuted: () => selectedMusicTrackIds.length === 0,
+    getSelectedMusicTracks: () => selectedMusicTrackIds.slice(),
     sendInput: (input) => {
       if (soloMode) activeGame?.onPeerInput?.(MY_ID, input);
       else net.send({ t: "game-input", input });
@@ -646,19 +675,61 @@ function gameHostApi() {
 }
 
 function updateMusicButton() {
-  const button = $("#btn-music");
-  if (!button) return;
-  button.classList.toggle("muted", musicMuted);
-  button.textContent = musicMuted ? "Music Off" : "Music On";
-  button.setAttribute("aria-label", musicMuted ? "Unmute music" : "Mute music");
-  button.setAttribute("aria-pressed", String(musicMuted));
+  renderMusicPicker();
 }
 
-function toggleMusicMute() {
-  musicMuted = !musicMuted;
-  localStorage.setItem(MUSIC_MUTED_KEY, musicMuted ? "1" : "0");
-  updateMusicButton();
-  activeGame?.setMusicMuted?.(musicMuted);
+function musicPickerLabel() {
+  const tracks = availableMusicTracks();
+  if (!selectedMusicTrackIds.length) return "Music: None";
+  if (selectedMusicTrackIds.length === 1) return tracks.find((track) => track.id === selectedMusicTrackIds[0])?.name || "Music: 1 track";
+  return `Music: ${selectedMusicTrackIds.length} tracks`;
+}
+
+function renderMusicPicker() {
+  const button = $("#btn-music-picker");
+  const menu = $("#music-picker-menu");
+  if (!button || !menu) return;
+  const tracks = availableMusicTracks();
+  button.textContent = musicPickerLabel();
+  menu.innerHTML = tracks.map((track) => `
+    <div class="music-track-row">
+      <label class="music-track-choice">
+        <input type="checkbox" value="${esc(track.id)}" ${selectedMusicTrackIds.includes(track.id) ? "checked" : ""} />
+        <span>
+          <strong>${esc(track.name)}</strong>
+          <small>${esc(track.mood || "Loop")}</small>
+        </span>
+      </label>
+      <button class="music-sample-btn" type="button" data-track-id="${esc(track.id)}">Sample</button>
+    </div>`).join("") || `<p class="music-empty">No music tracks available.</p>`;
+}
+
+function toggleMusicPicker() {
+  const picker = $("#music-picker");
+  const button = $("#btn-music-picker");
+  if (!picker || !button) return;
+  const open = !picker.classList.contains("open");
+  picker.classList.toggle("open", open);
+  button.setAttribute("aria-expanded", String(open));
+}
+
+function wireMusicPicker() {
+  const button = $("#btn-music-picker");
+  if (button) button.onclick = toggleMusicPicker;
+  const menu = $("#music-picker-menu");
+  if (!menu) return;
+  menu.onchange = (event) => {
+    if (event.target?.type !== "checkbox") return;
+    const selected = [...menu.querySelectorAll("input[type='checkbox']:checked")].map((input) => input.value);
+    setSelectedMusicTracks(selected);
+    renderMusicPicker();
+  };
+  menu.onclick = (event) => {
+    const sample = event.target?.closest?.(".music-sample-btn");
+    if (!sample) return;
+    event.preventDefault();
+    activeGame?.sampleMusicTrack?.(sample.dataset.trackId);
+  };
 }
 
 function updateInvitePanel() {
@@ -929,8 +1000,7 @@ function refreshCachedPwaFiles() {
 function wireManageControls() {
   const reset = $("#btn-reset");
   if (reset) reset.onclick = resetGame;
-  const music = $("#btn-music");
-  if (music) music.onclick = toggleMusicMute;
+  wireMusicPicker();
   const leave = $("#btn-leave-lobby");
   if (leave) leave.onclick = leaveLobby;
   const leaveTop = $("#btn-leave-lobby-top");
@@ -968,6 +1038,7 @@ function updateHostControlButtons() {
 function startGame(initialState = null) {
   activeGame?.destroy?.();
   activeGame = window.SimpleRainGame.create(gameHostApi(), initialState);
+  activeGame.setMusicTracks?.(selectedMusicTrackIds);
   activeGame.start?.();
   if (pendingGameState) {
     activeGame.onState?.(pendingGameState);
@@ -1652,6 +1723,12 @@ $("#input-icon")?.addEventListener("input", (event) => {
 });
 $("#input-home-lobby-code")?.addEventListener("input", (event) => {
   event.target.value = event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
+});
+document.addEventListener("click", (event) => {
+  const picker = $("#music-picker");
+  if (!picker?.classList.contains("open") || picker.contains(event.target)) return;
+  picker.classList.remove("open");
+  $("#btn-music-picker")?.setAttribute("aria-expanded", "false");
 });
 $("#menu-version").textContent = `Version ${APP_VERSION}`;
 updateProfilePreview();

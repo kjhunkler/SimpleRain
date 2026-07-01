@@ -85,9 +85,32 @@
     <div class="manage-group">
       <h3>Game</h3>
       <div id="lobby-options-controls" class="lobby-controls">
-        <button id="btn-music" class="manage-btn" aria-label="Mute music" type="button" aria-pressed="false">Music On</button>
+        <div class="music-picker" id="music-picker">
+          <button id="btn-music-picker" class="manage-btn music-picker-toggle" type="button" aria-expanded="false">Music</button>
+          <div id="music-picker-menu" class="music-picker-menu" aria-label="Music tracks"></div>
+        </div>
         <button id="btn-reset" class="manage-btn" type="button">Reset Game</button>
         <button id="btn-leave-lobby" class="manage-btn danger" type="button">Leave Lobby</button>
+      </div>
+    </div>
+    <div class="manage-group">
+      <h3>Lobby</h3>
+      <div id="lobby-active-controls" class="lobby-controls">
+        <div class="invite-panel" aria-label="Lobby invite">
+          <div class="invite-code-row">
+            <span>Invite Code</span>
+            <strong id="invite-code">simple-rain</strong>
+          </div>
+          <div class="invite-qr-wrap">
+            <img id="invite-qr" class="invite-qr" alt="Lobby invite QR code" />
+          </div>
+          <label class="invite-link-label" for="invite-link">Invite Link</label>
+          <input id="invite-link" class="text-input invite-link-input" type="text" readonly />
+          <div class="invite-actions">
+            <button id="btn-copy-invite" class="manage-btn" type="button">Copy Link</button>
+            <button id="btn-share-invite" class="manage-btn" type="button">Share via Text</button>
+          </div>
+        </div>
       </div>
     </div>
     <div class="manage-group app-update-group">
@@ -99,8 +122,8 @@
   </div>
 
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <script src="js/peer-net.js?v=1.1.8"></script>
-  <script src="js/games/simple-rain.js?v=1.1.8"></script>
-  <script src="js/app.js?v=1.1.8"></script>
+  <script src="js/peer-net.js?v=1.1.9"></script>
+  <script src="js/games/simple-rain.js?v=1.1.9"></script>
+  <script src="js/app.js?v=1.1.9"></script>
 </body>
 </html>

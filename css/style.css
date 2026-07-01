@@ -1069,6 +1069,92 @@ input, textarea, select {
 .manage-btn.muted { opacity: 0.72; }
 .manage-btn.danger { color: #ffd6d6; }
 
+.music-picker {
+  position: relative;
+  width: 100%;
+}
+
+.music-picker-toggle {
+  text-align: left;
+  padding: 0 40px 0 14px;
+}
+
+.music-picker-toggle::after {
+  content: "▾";
+  position: absolute;
+  right: 14px;
+}
+
+.music-picker-menu {
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid #2c2c44;
+  border-radius: 14px;
+  background: rgba(8, 20, 30, 0.56);
+}
+
+.music-picker.open .music-picker-menu { display: flex; }
+
+.music-track-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border-radius: 12px;
+  background: rgba(28, 28, 46, 0.74);
+}
+
+.music-track-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.music-track-choice input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+  flex: 0 0 auto;
+}
+
+.music-track-choice span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.music-track-choice strong {
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.music-track-choice small, .music-empty {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.music-sample-btn {
+  min-height: 34px;
+  border: none;
+  border-radius: 10px;
+  padding: 0 10px;
+  background: #26364a;
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.music-sample-btn:active { transform: scale(0.96); }
+
 .swatch-grid {
   display: flex;
   gap: 10px;

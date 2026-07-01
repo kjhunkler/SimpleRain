@@ -42,6 +42,110 @@
     "A small wave carries your choice onward.",
     "The blossoms are patient.",
   ];
+  const MUSIC_TRACKS = [
+    {
+      id: "lotus-drift",
+      name: "Lotus Drift",
+      mood: "Peaceful",
+      bpm: 72,
+      melody: [69, 72, 76, 74, 72, null, 67, 64, 67, 71, 74, 72, 69, 64, null, 62],
+      bass: [45, null, 52, null, 48, null, 55, null, 43, null, 50, null, 48, null, 52, null],
+      harmony: [57, null, null, 60, null, 64, null, null, 55, null, null, 59, null, 62, null, null],
+      stepBeats: 2,
+      melodyDur: 2.25,
+      bassDur: 3.5,
+      wave: "sine",
+      accentWave: "triangle",
+      melodyVol: 0.010,
+      bassVol: 0.007,
+      harmonyVol: 0.004,
+    },
+    {
+      id: "moon-pool",
+      name: "Moon Pool",
+      mood: "Sleepy",
+      bpm: 58,
+      melody: [64, null, 67, 69, null, 67, 62, null, 60, null, 64, 67, null, 64, 59, null],
+      bass: [40, null, null, 47, null, null, 45, null, 38, null, null, 45, null, null, 43, null],
+      harmony: [52, null, 55, null, 57, null, null, null, 50, null, 53, null, 55, null, null, null],
+      stepBeats: 2,
+      melodyDur: 2.9,
+      bassDur: 4.4,
+      wave: "sine",
+      accentWave: "sine",
+      melodyVol: 0.008,
+      bassVol: 0.006,
+      harmonyVol: 0.0035,
+    },
+    {
+      id: "clear-current",
+      name: "Clear Current",
+      mood: "Focus",
+      bpm: 84,
+      melody: [72, 76, 79, null, 76, 74, 72, 69, 71, 74, 78, null, 74, 72, 69, 67],
+      bass: [48, null, 55, null, 52, null, 59, null, 45, null, 52, null, 50, null, 57, null],
+      harmony: [60, null, 64, null, null, 67, null, null, 57, null, 62, null, null, 66, null, null],
+      stepBeats: 1.5,
+      melodyDur: 1.55,
+      bassDur: 2.6,
+      wave: "triangle",
+      accentWave: "sine",
+      melodyVol: 0.009,
+      bassVol: 0.0065,
+      harmonyVol: 0.0035,
+    },
+    {
+      id: "moss-bells",
+      name: "Moss Bells",
+      mood: "Peaceful",
+      bpm: 66,
+      melody: [67, 71, 74, null, 76, 74, 71, null, 69, 72, 76, null, 74, 71, 67, null],
+      bass: [43, null, 50, null, 47, null, 55, null, 45, null, 52, null, 47, null, 50, null],
+      harmony: [55, 59, null, null, 62, null, 59, null, 57, 60, null, null, 62, null, 59, null],
+      stepBeats: 2,
+      melodyDur: 2.1,
+      bassDur: 3.8,
+      wave: "sine",
+      accentWave: "triangle",
+      melodyVol: 0.009,
+      bassVol: 0.006,
+      harmonyVol: 0.0045,
+    },
+    {
+      id: "cloud-hammock",
+      name: "Cloud Hammock",
+      mood: "Sleepy",
+      bpm: 52,
+      melody: [60, null, null, 64, 67, null, 65, null, 59, null, null, 62, 65, null, 64, null],
+      bass: [36, null, null, null, 43, null, null, null, 41, null, null, null, 48, null, null, null],
+      harmony: [48, null, 52, null, null, 55, null, null, 47, null, 50, null, null, 53, null, null],
+      stepBeats: 2,
+      melodyDur: 3.2,
+      bassDur: 5.4,
+      wave: "sine",
+      accentWave: "sine",
+      melodyVol: 0.0075,
+      bassVol: 0.0055,
+      harmonyVol: 0.003,
+    },
+    {
+      id: "rain-abacus",
+      name: "Rain Abacus",
+      mood: "Focus",
+      bpm: 92,
+      melody: [69, 71, 72, 76, null, 74, 72, 71, 67, 69, 71, 74, null, 72, 71, 69],
+      bass: [45, null, 52, null, 45, null, 52, null, 43, null, 50, null, 43, null, 50, null],
+      harmony: [57, null, null, 60, 64, null, null, null, 55, null, null, 59, 62, null, null, null],
+      stepBeats: 1.25,
+      melodyDur: 1.25,
+      bassDur: 2.1,
+      wave: "triangle",
+      accentWave: "triangle",
+      melodyVol: 0.0085,
+      bassVol: 0.006,
+      harmonyVol: 0.003,
+    },
+  ];
 
   function create(host, initialState) {
     const canvas = host.canvas;
@@ -60,6 +164,10 @@
     let musicGain = null;
     let musicTimer = null;
     let musicStep = 0;
+    let selectedMusicTrackIds = host.getSelectedMusicTracks?.() || [];
+    let musicShuffleQueue = [];
+    let currentMusicTrack = null;
+    let sampleGain = null;
     let eventSeq = 0;
     let seenEventSeq = 0;
     let ui = { board: null, hand: null, handTile: null, deck: null, reset: null, cells: new Map(), scale: 1 };
@@ -144,11 +252,50 @@
       return audioCtx;
     }
 
+    function ensureSampleGain() {
+      ensureAudio();
+      if (!sampleGain) {
+        sampleGain = audioCtx.createGain();
+        sampleGain.gain.value = 1;
+        sampleGain.connect(audioCtx.destination);
+      }
+      return sampleGain;
+    }
+
     function noteFreq(note) {
       return 440 * Math.pow(2, (note - 69) / 12);
     }
 
-    function playMusicTone(freq, start, dur, vol, type = "sine") {
+    function musicTrack(id) {
+      return MUSIC_TRACKS.find((track) => track.id === id) || null;
+    }
+
+    function activeMusicTracks() {
+      return selectedMusicTrackIds.map(musicTrack).filter(Boolean);
+    }
+
+    function shuffleTracks(tracks) {
+      const queue = tracks.slice();
+      for (let i = queue.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [queue[i], queue[j]] = [queue[j], queue[i]];
+      }
+      return queue;
+    }
+
+    function nextMusicTrack() {
+      const tracks = activeMusicTracks();
+      if (!tracks.length) return null;
+      musicShuffleQueue = musicShuffleQueue.filter((track) => selectedMusicTrackIds.includes(track.id));
+      if (!musicShuffleQueue.length) musicShuffleQueue = shuffleTracks(tracks);
+      if (tracks.length > 1 && musicShuffleQueue[0]?.id === currentMusicTrack?.id) {
+        const moved = musicShuffleQueue.shift();
+        musicShuffleQueue.push(moved);
+      }
+      return musicShuffleQueue.shift() || tracks[0];
+    }
+
+    function playMusicTone(freq, start, dur, vol, type = "sine", destination = musicGain || audioCtx.destination) {
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       osc.type = type;
@@ -158,7 +305,7 @@
       gain.gain.exponentialRampToValueAtTime(vol, start + 0.18);
       gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
       osc.connect(gain);
-      gain.connect(musicGain || audioCtx.destination);
+      gain.connect(destination);
       osc.start(start);
       osc.stop(start + dur + 0.05);
     }
@@ -167,31 +314,82 @@
       if (host.isMusicMuted?.()) return;
       try {
         ensureAudio();
-        const t = audioCtx.currentTime + 0.03;
-        const melody = [69, 72, 76, 74, 72, 67, 64, null, 67, 71, 74, 72, 69, 64, 62, null];
-        const bass = [45, null, 52, null, 48, null, 55, null, 43, null, 50, null, 48, null, 52, null];
-        const note = melody[musicStep % melody.length];
-        const root = bass[musicStep % bass.length];
-        if (note !== null) playMusicTone(noteFreq(note), t, 1.85, 0.010, "sine");
-        if (root !== null) {
-          playMusicTone(noteFreq(root), t, 2.8, 0.007, "triangle");
-          playMusicTone(noteFreq(root + 7), t + 0.06, 2.4, 0.004, "sine");
+        if (!currentMusicTrack || musicStep >= currentMusicTrack.melody.length) {
+          currentMusicTrack = nextMusicTrack();
+          musicStep = 0;
         }
+        if (!currentMusicTrack) {
+          stopMusic();
+          return;
+        }
+        const t = audioCtx.currentTime + 0.03;
+        const track = currentMusicTrack;
+        const note = track.melody[musicStep % track.melody.length];
+        const root = track.bass[musicStep % track.bass.length];
+        const harmony = track.harmony?.[musicStep % track.harmony.length];
+        const stepSeconds = 60 / track.bpm * track.stepBeats;
+        if (note !== null) playMusicTone(noteFreq(note), t, track.melodyDur, track.melodyVol, track.wave);
+        if (root !== null) {
+          playMusicTone(noteFreq(root), t, track.bassDur, track.bassVol, track.accentWave);
+          playMusicTone(noteFreq(root + 7), t + 0.06, track.bassDur * 0.82, track.bassVol * 0.55, "sine");
+        }
+        if (harmony !== null && harmony !== undefined) playMusicTone(noteFreq(harmony), t + stepSeconds * 0.45, track.melodyDur * 0.65, track.harmonyVol, "sine");
         musicStep++;
+        if (musicTimer !== null) {
+          clearTimeout(musicTimer);
+          musicTimer = setTimeout(playMusicStep, stepSeconds * 1000);
+        }
       } catch {}
     }
 
     function startMusic() {
       if (host.isMusicMuted?.()) return;
       if (musicTimer) return;
-      playMusicStep();
-      musicTimer = setInterval(playMusicStep, 1650);
+      musicTimer = setTimeout(playMusicStep, 0);
     }
 
     function stopMusic() {
       if (!musicTimer) return;
-      clearInterval(musicTimer);
+      clearTimeout(musicTimer);
       musicTimer = null;
+    }
+
+    function setMusicTracks(ids) {
+      selectedMusicTrackIds = Array.isArray(ids) ? ids.filter((id) => musicTrack(id)) : [];
+      musicShuffleQueue = musicShuffleQueue.filter((track) => selectedMusicTrackIds.includes(track.id));
+      if (!selectedMusicTrackIds.length) {
+        stopMusic();
+        currentMusicTrack = null;
+        musicStep = 0;
+        if (musicGain && audioCtx) musicGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.03);
+        return;
+      }
+      if (musicGain && audioCtx) musicGain.gain.setTargetAtTime(1, audioCtx.currentTime, 0.03);
+      if (!selectedMusicTrackIds.includes(currentMusicTrack?.id)) {
+        currentMusicTrack = null;
+        musicStep = 0;
+      }
+      startMusic();
+    }
+
+    function sampleMusicTrack(id) {
+      const track = musicTrack(id);
+      if (!track) return;
+      try {
+        const destination = ensureSampleGain();
+        const t = audioCtx.currentTime + 0.03;
+        const stepSeconds = 60 / track.bpm * track.stepBeats;
+        const steps = Math.min(8, track.melody.length);
+        for (let i = 0; i < steps; i++) {
+          const start = t + i * stepSeconds;
+          const note = track.melody[i % track.melody.length];
+          const root = track.bass[i % track.bass.length];
+          const harmony = track.harmony?.[i % track.harmony.length];
+          if (note !== null) playMusicTone(noteFreq(note), start, Math.min(track.melodyDur, stepSeconds * 1.35), track.melodyVol * 1.25, track.wave, destination);
+          if (root !== null) playMusicTone(noteFreq(root), start, Math.min(track.bassDur, stepSeconds * 2.2), track.bassVol, track.accentWave, destination);
+          if (harmony !== null && harmony !== undefined) playMusicTone(noteFreq(harmony), start + stepSeconds * 0.45, Math.min(track.melodyDur * 0.65, stepSeconds), track.harmonyVol * 1.2, "sine", destination);
+        }
+      } catch {}
     }
 
     function emitEvent(kind, x = 0.5, y = 0.5, color = "#ffffff") {
@@ -2156,6 +2354,8 @@
         if (muted) stopMusic();
         else startMusic();
       },
+      setMusicTracks,
+      sampleMusicTrack,
       restart() { if (isHost()) resetHostState(); },
     };
   }
@@ -2165,6 +2365,7 @@
     id: "simple-rain",
     name: "SimpleRain",
     emoji: "🌧️",
+    musicTracks: MUSIC_TRACKS.map(({ id, name, mood }) => ({ id, name, mood })),
     create,
   };
 })();
