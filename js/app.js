@@ -196,7 +196,7 @@ function renderPlayers() {
   const list = $("#player-list");
   if (!list) return;
   const visible = getVisiblePlayers();
-  const hostId = soloMode || net.isHost ? MY_ID : lastHostOrder[0];
+  const hostId = soloMode ? null : net.isHost ? MY_ID : lastHostOrder[0];
   list.innerHTML = "";
   for (const player of visible) {
     const li = document.createElement("li");
@@ -214,10 +214,20 @@ function loadCachedGameState() {
 function saveCachedGameState(state) {
   if (!state) return;
   try { localStorage.setItem(GAME_SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state })); } catch {}
+  updateContinueButton();
 }
 
 function clearCachedGameState() {
   try { localStorage.removeItem(GAME_SAVE_KEY); } catch {}
+  updateContinueButton();
+}
+
+function hasCachedGameState() {
+  return !!loadCachedGameState();
+}
+
+function updateContinueButton() {
+  $("#btn-continue-game")?.classList.toggle("hidden", !hasCachedGameState());
 }
 
 function snapshotGame() {
@@ -245,7 +255,10 @@ function gameHostApi() {
       else net.send({ t: "game-input", input });
     },
     broadcastState: (state) => {
-      if (soloMode) return;
+      if (soloMode) {
+        saveCachedGameState(state);
+        return;
+      }
       if (!net.isHost) return;
       saveCachedGameState(state);
       broadcastGameState(state);
@@ -435,6 +448,8 @@ function wireManageControls() {
   if (host) host.onclick = hostNewLobby;
   const solo = $("#btn-play-solo");
   if (solo) solo.onclick = startSoloGame;
+  const continueGame = $("#btn-continue-game");
+  if (continueGame) continueGame.onclick = continueSavedGame;
   const refresh = $("#btn-refresh-lobbies");
   if (refresh) refresh.onclick = refreshFlowerLobbies;
   const refreshCache = $("#btn-refresh-cache");
@@ -455,7 +470,9 @@ function startGame(initialState = null) {
     activeGame.onState?.(pendingGameState);
     pendingGameState = null;
   }
-  if (net.isHost) {
+  if (soloMode) {
+    saveCachedGameState(snapshotGame());
+  } else if (net.isHost) {
     const state = snapshotGame();
     saveCachedGameState(state);
     broadcastGameState(state);
@@ -467,6 +484,20 @@ function newLobbyChannel() {
 }
 
 function startSoloGame() {
+  startLocalGame(null, true, "Playing solo");
+}
+
+function continueSavedGame() {
+  const cached = loadCachedGameState();
+  if (!cached) {
+    updateContinueButton();
+    setStatus("No saved game found.");
+    return;
+  }
+  startLocalGame(cached, false, "Continuing saved game");
+}
+
+function startLocalGame(initialState, fresh, status) {
   stopHostLoop();
   stopHostWatchdog();
   clearHandoffTimer();
@@ -486,15 +517,20 @@ function startSoloGame() {
   lastHostOrder = [MY_ID];
   updateLobbyUrl();
   updateLobbyControls();
-  clearCachedGameState();
-  startGame(null);
+  if (fresh) clearCachedGameState();
+  startGame(initialState);
   renderPlayers();
   show("play");
-  setStatus("Playing solo");
+  setStatus(status);
 }
 
 function leaveLobby() {
-  if (!confirm("Leave this lobby? Other players will stay in the current lobby.")) return;
+  const wasSolo = soloMode;
+  const message = wasSolo
+    ? "Leave this solo game? You can continue it later from the home screen."
+    : "Leave this lobby? Other players will stay in the current lobby.";
+  if (!confirm(message)) return;
+  if (wasSolo) saveCachedGameState(snapshotGame());
   stopHostLoop();
   stopHostWatchdog();
   clearHandoffTimer();
@@ -518,6 +554,7 @@ function leaveLobby() {
   setStatus("Choose how to play.");
   show("loading");
   updateLobbyControls();
+  updateContinueButton();
   closeProfileSheet();
 }
 
@@ -574,7 +611,7 @@ function joinLobbyFromHomeCode() {
 function initializeHomeInviteCode() {
   const input = $("#input-home-lobby-code");
   if (!input || input.value) return;
-  input.value = randomLobbyCode();
+  input.value = sessionChannel ? sessionChannel.toUpperCase().slice(0, 4) : randomLobbyCode();
 }
 
 function ensureGameStarted(initialState = null) {
@@ -1027,17 +1064,13 @@ initializeHomeInviteCode();
 updateLobbyUrl();
 updateInvitePanel();
 updateLobbyControls();
+updateContinueButton();
 wireManageControls();
 
 wireNetEvents();
 registerServiceWorker();
 show("loading");
 renderFlowerLobbies();
-if (sessionChannel) {
-  setStatus("Finding a SimpleRain session...");
-  connectToLobby(sessionChannel, false, false);
-} else {
-  setStatus("Choose how to play.");
-  refreshFlowerLobbies();
-}
+setStatus("Choose how to play.");
+refreshFlowerLobbies();
 render();
