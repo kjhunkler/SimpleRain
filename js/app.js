@@ -1,6 +1,6 @@
 /* SimpleRain app shell: auto host/join, profile editing, host-owned game state. */
 
-const APP_VERSION = "1.1.1";
+const APP_VERSION = "1.1.2";
 const AUTO_CHANNEL = "simple-rain";
 const GAME_SAVE_KEY = "simplerain-host-cache";
 const MUSIC_MUTED_KEY = "simplerain-music-muted";
@@ -408,8 +408,6 @@ function wireManageControls() {
   if (share) share.onclick = shareInviteLink;
   const host = $("#btn-host-lobby");
   if (host) host.onclick = hostNewLobby;
-  const homeHost = $("#btn-home-host-lobby");
-  if (homeHost) homeHost.onclick = hostNewLobby;
   const solo = $("#btn-play-solo");
   if (solo) solo.onclick = startSoloGame;
   const refresh = $("#btn-refresh-lobbies");
@@ -543,7 +541,13 @@ function joinLobbyFromCode() {
 
 function joinLobbyFromHomeCode() {
   const code = $("#input-home-lobby-code")?.value;
-  connectToLobby(code || AUTO_CHANNEL, false, false);
+  connectToLobby(code || newLobbyChannel(), false, false);
+}
+
+function initializeHomeInviteCode() {
+  const input = $("#input-home-lobby-code");
+  if (!input || input.value) return;
+  input.value = randomLobbyCode();
 }
 
 function ensureGameStarted(initialState = null) {
@@ -986,9 +990,13 @@ $("#input-icon")?.addEventListener("input", (event) => {
   updateProfilePreview();
   broadcastProfile();
 });
+$("#input-home-lobby-code")?.addEventListener("input", (event) => {
+  event.target.value = event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
+});
 $("#menu-version").textContent = `Version ${APP_VERSION}`;
 updateProfilePreview();
 updateMusicButton();
+initializeHomeInviteCode();
 updateLobbyUrl();
 updateInvitePanel();
 updateLobbyControls();
