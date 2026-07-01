@@ -174,6 +174,25 @@ input, textarea, select {
   font-size: 2rem;
 }
 
+.flower-svg {
+  width: 48px;
+  height: 48px;
+  display: block;
+}
+
+.flower-svg .flower-stem {
+  fill: none;
+  stroke: #28794d;
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.flower-svg .flower-center { fill: #ffe28f; }
+.iris-svg .iris-standard { fill: #7d5cff; stroke: #e2d6ff; stroke-width: 1.2; }
+.iris-svg .iris-fall { fill: #b18cff; stroke: #f3e7ff; stroke-width: 1.2; }
+.orchid-svg .orchid-petal { fill: #cf8cff; stroke: #f7dbff; stroke-width: 1.2; }
+.orchid-svg .orchid-lip { fill: #fff4c2; stroke: #d477c9; stroke-width: 1.2; }
+
 .flower-lobby-content {
   min-width: 0;
   display: flex;

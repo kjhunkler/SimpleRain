@@ -1,6 +1,6 @@
 /* SimpleRain app shell: auto host/join, profile editing, host-owned game state. */
 
-const APP_VERSION = "1.1.4";
+const APP_VERSION = "1.1.5";
 const AUTO_CHANNEL = "simple-rain";
 const GAME_SAVE_KEY = "simplerain-host-cache";
 const MUSIC_MUTED_KEY = "simplerain-music-muted";
@@ -17,13 +17,13 @@ const ICONS = ["🐸", "🐢", "🐟", "🦆", "🦋", "🐞", "🐝", "🦗", "
 const INVITE_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const FLOWER_LOBBIES = [
   { key: "lotus", name: "Lotus", icon: "🪷", color: "#f4a6cf" },
-  { key: "iris", name: "Iris", icon: "💜", color: "#a993ff" },
+  { key: "iris", name: "Iris", art: "iris", color: "#a993ff" },
   { key: "lily", name: "Lily", icon: "🌸", color: "#f7f0bd" },
   { key: "clover", name: "Clover", icon: "☘️", color: "#8ce8bc" },
   { key: "anemone", name: "Anemone", icon: "🌼", color: "#8ed8ff" },
   { key: "poppy", name: "Poppy", icon: "🌺", color: "#ff9a76" },
   { key: "aster", name: "Aster", icon: "🌷", color: "#d9a6ff" },
-  { key: "orchid", name: "Orchid", icon: "🌻", color: "#94d78d" },
+  { key: "orchid", name: "Orchid", art: "orchid", color: "#94d78d" },
 ];
 
 const $ = (sel) => document.querySelector(sel);
@@ -349,6 +349,36 @@ function lobbyCardMeta(info) {
   return "Tap anytime. If no host answers, you become host.";
 }
 
+function flowerArt(lobby) {
+  if (lobby.art === "iris") {
+    return `
+      <svg class="flower-svg iris-svg" viewBox="0 0 64 64" aria-hidden="true">
+        <path class="iris-fall" d="M32 31 C19 34 14 46 18 56 C27 55 33 47 32 31 Z" />
+        <path class="iris-fall" d="M32 31 C45 34 50 46 46 56 C37 55 31 47 32 31 Z" />
+        <path class="iris-standard" d="M32 30 C20 21 20 10 32 5 C44 10 44 21 32 30 Z" />
+        <path class="iris-standard" d="M31 31 C20 27 11 18 15 9 C27 10 32 20 31 31 Z" />
+        <path class="iris-standard" d="M33 31 C44 27 53 18 49 9 C37 10 32 20 33 31 Z" />
+        <path class="flower-stem" d="M32 34 C31 43 31 52 32 61" />
+        <circle class="flower-center" cx="32" cy="31" r="4" />
+      </svg>
+    `;
+  }
+  if (lobby.art === "orchid") {
+    return `
+      <svg class="flower-svg orchid-svg" viewBox="0 0 64 64" aria-hidden="true">
+        <ellipse class="orchid-petal" cx="32" cy="17" rx="10" ry="15" />
+        <ellipse class="orchid-petal" cx="18" cy="31" rx="9" ry="14" transform="rotate(-42 18 31)" />
+        <ellipse class="orchid-petal" cx="46" cy="31" rx="9" ry="14" transform="rotate(42 46 31)" />
+        <ellipse class="orchid-petal" cx="25" cy="43" rx="8" ry="12" transform="rotate(34 25 43)" />
+        <ellipse class="orchid-petal" cx="39" cy="43" rx="8" ry="12" transform="rotate(-34 39 43)" />
+        <path class="orchid-lip" d="M24 34 C29 29 35 29 40 34 C39 45 35 52 32 55 C29 52 25 45 24 34 Z" />
+        <circle class="flower-center" cx="32" cy="35" r="4" />
+      </svg>
+    `;
+  }
+  return esc(lobby.icon);
+}
+
 function renderFlowerLobbies(results = new Map()) {
   const list = $("#flower-lobby-list");
   if (!list) return;
@@ -362,7 +392,7 @@ function renderFlowerLobbies(results = new Map()) {
     button.style.setProperty("--flower", lobby.color);
     button.dataset.channel = channel;
     button.innerHTML = `
-      <span class="flower-art" aria-hidden="true">${esc(lobby.icon)}</span>
+      <span class="flower-art" aria-hidden="true">${flowerArt(lobby)}</span>
       <span class="flower-lobby-content">
         <span class="flower-lobby-name">${esc(lobby.name)}</span>
         <span class="flower-lobby-status">${esc(lobbyStatusText(info))}</span>
