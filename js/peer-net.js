@@ -116,19 +116,28 @@ class PeerNet {
   // and the auto() election path.
   _acceptConnections(peer) {
     peer.on("connection", (conn) => {
+      const isProbe = conn.metadata?.type === "lobby-probe";
       conn.on("open", () => {
         if (this._closed) return;
+        if (isProbe) {
+          this._emit("lobby-probe", {
+            peerId: conn.peer,
+            reply: (msg) => this._safeSend(conn, msg),
+            close: () => conn.close(),
+          });
+          return;
+        }
         this.conns.set(conn.peer, conn);
         this._emit("peer-join", conn.peer);
       });
-      conn.on("data", (data) => { if (!this._closed) this._emit("message", { from: conn.peer, data }); });
+      conn.on("data", (data) => { if (!this._closed && !isProbe) this._emit("message", { from: conn.peer, data }); });
       conn.on("close", () => {
-        if (this._closed) return;
+        if (this._closed || isProbe) return;
         this.conns.delete(conn.peer);
         this._emit("peer-leave", conn.peer);
       });
       conn.on("error", (err) => {
-        if (this._closed) return;
+        if (this._closed || isProbe) return;
         this.conns.delete(conn.peer);
         this._emit("peer-leave", conn.peer);
         this._emit("error", err);
@@ -312,6 +321,46 @@ class PeerNet {
     this.code = this._autoId.slice(PREFIX.length);
     if (preferHost) this._becomeHost();
     else this._tryJoinThenHost();
+  }
+
+  probe(channel, timeoutMs = 3000) {
+    const targetId = PREFIX + "auto" + (channel ? "-" + channel : "");
+    return new Promise((resolve) => {
+      let peer = null;
+      let conn = null;
+      let settled = false;
+      let connected = false;
+
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try { conn?.close(); } catch {}
+        try { peer?.destroy(); } catch {}
+        resolve(result);
+      };
+
+      const timer = setTimeout(() => {
+        finish(connected ? { active: true, channel } : { active: false, channel });
+      }, timeoutMs);
+
+      try {
+        peer = new Peer(peerOptions());
+        peer.on("open", () => {
+          conn = peer.connect(targetId, { reliable: true, metadata: { type: "lobby-probe" } });
+          conn.on("open", () => { connected = true; });
+          conn.on("data", (data) => {
+            if (data?.t === "lobby-info") finish({ ...data, active: true, channel });
+            else finish({ active: true, channel, data });
+          });
+          conn.on("close", () => finish({ active: connected, channel }));
+          conn.on("error", (err) => finish({ active: false, channel, error: err?.type || err?.message || String(err) }));
+        });
+        peer.on("error", (err) => finish({ active: false, channel, error: err?.type || err?.message || String(err) }));
+      } catch (err) {
+        finish({ active: false, channel, error: err?.message || String(err) });
+      }
+    });
   }
 
   destroy() {

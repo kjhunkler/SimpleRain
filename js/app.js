@@ -1,15 +1,27 @@
 /* SimpleRain app shell: auto host/join, profile editing, host-owned game state. */
 
-const APP_VERSION = "1.0.9";
+const APP_VERSION = "1.1.0";
 const AUTO_CHANNEL = "simple-rain";
 const GAME_SAVE_KEY = "simplerain-host-cache";
 const MUSIC_MUTED_KEY = "simplerain-music-muted";
 const LOBBY_PARAM = "lobby";
+const LOBBY_SCAN_TIMEOUT_MS = 2600;
 const PLAYER_HEARTBEAT_MS = 15000;
 const HOST_WATCHDOG_MS = Math.max(45000, PLAYER_HEARTBEAT_MS * 3);
 const CLIENT_WELCOME_TIMEOUT_MS = 10000;
 const COLORS = ["#ff5d5d", "#ff9d4d", "#ffd24d", "#7CFC9B", "#33ddaa", "#4dd2ff", "#4d8bff", "#7766ff", "#c98cff", "#ff6fd0", "#22cc88", "#ff6600"];
 const ICONS = ["🐸", "🐢", "🐟", "🦆", "🦋", "🐞", "🐝", "🦗", "🦎", "🐌", "🦀", "🦊", "🐰", "🦝", "🦉", "🐿️"];
+const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+const FLOWER_LOBBIES = [
+  { key: "lotus", name: "Lotus", icon: "🪷", color: "#f4a6cf" },
+  { key: "iris", name: "Iris", icon: "💜", color: "#a993ff" },
+  { key: "lily", name: "Lily", icon: "🌸", color: "#f7f0bd" },
+  { key: "clover", name: "Clover", icon: "☘️", color: "#8ce8bc" },
+  { key: "anemone", name: "Anemone", icon: "🌼", color: "#8ed8ff" },
+  { key: "poppy", name: "Poppy", icon: "🌺", color: "#ff9a76" },
+  { key: "aster", name: "Aster", icon: "🌷", color: "#d9a6ff" },
+  { key: "orchid", name: "Orchid", icon: "🌻", color: "#94d78d" },
+];
 
 const $ = (sel) => document.querySelector(sel);
 const screens = { loading: $("#screen-loading"), play: $("#screen-play") };
@@ -35,7 +47,9 @@ let nameTimer = null;
 let musicMuted = localStorage.getItem(MUSIC_MUTED_KEY) === "1";
 let sessionChannel = initialLobbyChannel();
 let showInviteAfterReady = false;
-let inLobby = true;
+let inLobby = false;
+let soloMode = false;
+let lobbyScanToken = 0;
 
 const players = new Map();
 const peerMap = new Map();
@@ -54,22 +68,33 @@ function normalizeLobbyChannel(value) {
 function initialLobbyChannel() {
   try {
     const params = new URLSearchParams(location.search);
-    return normalizeLobbyChannel(params.get(LOBBY_PARAM) || AUTO_CHANNEL);
+    return normalizeLobbyChannel(params.get(LOBBY_PARAM) || "");
   } catch {
-    return AUTO_CHANNEL;
+    return "";
   }
+}
+
+function flowerLobbyChannel(lobby) {
+  return `${AUTO_CHANNEL}-${lobby.key}`;
+}
+
+function randomLobbyCode() {
+  let code = "";
+  for (let i = 0; i < 4; i++) code += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
+  return code;
 }
 
 function inviteUrl() {
   const url = new URL(location.href);
-  url.searchParams.set(LOBBY_PARAM, sessionChannel);
+  if (!sessionChannel || soloMode) url.searchParams.delete(LOBBY_PARAM);
+  else url.searchParams.set(LOBBY_PARAM, sessionChannel);
   url.hash = "";
   return url.toString();
 }
 
 function updateLobbyUrl() {
   const url = new URL(location.href);
-  if (sessionChannel === AUTO_CHANNEL) url.searchParams.delete(LOBBY_PARAM);
+  if (!sessionChannel || soloMode) url.searchParams.delete(LOBBY_PARAM);
   else url.searchParams.set(LOBBY_PARAM, sessionChannel);
   history.replaceState(null, "", url.toString());
 }
@@ -164,14 +189,14 @@ function addPlayer(id, name, peerId, icon, preferredColor) {
 }
 
 function getVisiblePlayers() {
-  return net.isHost ? [...players.values()] : lastState;
+  return soloMode || net.isHost ? [...players.values()] : lastState;
 }
 
 function renderPlayers() {
   const list = $("#player-list");
   if (!list) return;
   const visible = getVisiblePlayers();
-  const hostId = net.isHost ? MY_ID : lastHostOrder[0];
+  const hostId = soloMode || net.isHost ? MY_ID : lastHostOrder[0];
   list.innerHTML = "";
   for (const player of visible) {
     const li = document.createElement("li");
@@ -210,13 +235,17 @@ function gameHostApi() {
   return {
     canvas,
     myId: MY_ID,
-    isHost: () => net.isHost,
+    isHost: () => soloMode || net.isHost,
     getPlayers: () => getVisiblePlayers(),
     getProfile: (id) => profiles.get(id),
     isSpeaking: () => false,
     isMusicMuted: () => musicMuted,
-    sendInput: (input) => net.send({ t: "game-input", input }),
+    sendInput: (input) => {
+      if (soloMode) activeGame?.onPeerInput?.(MY_ID, input);
+      else net.send({ t: "game-input", input });
+    },
     broadcastState: (state) => {
+      if (soloMode) return;
       if (!net.isHost) return;
       saveCachedGameState(state);
       broadcastGameState(state);
@@ -242,8 +271,10 @@ function toggleMusicMute() {
 
 function updateInvitePanel() {
   const url = inviteUrl();
+  const invitePanel = document.querySelector(".invite-panel");
+  invitePanel?.classList.toggle("hidden", soloMode);
   const code = $("#invite-code");
-  if (code) code.textContent = sessionChannel;
+  if (code) code.textContent = sessionChannel || "solo";
   const link = $("#invite-link");
   if (link) link.value = url;
   const qr = $("#invite-qr");
@@ -251,13 +282,92 @@ function updateInvitePanel() {
 }
 
 function updateLobbyControls() {
-  $("#lobby-active-controls")?.classList.toggle("hidden", !inLobby);
-  $("#lobby-left-controls")?.classList.toggle("hidden", inLobby);
-  $("#home-lobby-controls")?.classList.toggle("hidden", inLobby);
+  const playing = inLobby || soloMode;
+  $("#lobby-active-controls")?.classList.toggle("hidden", !playing);
+  $("#lobby-left-controls")?.classList.toggle("hidden", playing);
+  $("#home-lobby-controls")?.classList.toggle("hidden", false);
   const code = $("#input-lobby-code");
   if (code && !code.value) code.value = sessionChannel;
   const homeCode = $("#input-home-lobby-code");
-  if (homeCode && !homeCode.value) homeCode.value = sessionChannel;
+  if (homeCode && !homeCode.value && sessionChannel) homeCode.value = sessionChannel;
+}
+
+function lobbyInfoPayload() {
+  const visible = getVisiblePlayers();
+  return {
+    t: "lobby-info",
+    channel: sessionChannel,
+    name: FLOWER_LOBBIES.find((lobby) => flowerLobbyChannel(lobby) === sessionChannel)?.name || sessionChannel,
+    hostName: profile.name,
+    hostId: MY_ID,
+    playerCount: visible.length || players.size || 1,
+    players: visible.map((player) => ({ id: player.id, name: player.name, icon: player.icon, color: player.color })),
+    isHost: net.isHost,
+    version: APP_VERSION,
+  };
+}
+
+function lobbyStatusText(info) {
+  if (!info) return "Checking - available if empty";
+  if (!info.active) return "Open - become host";
+  const count = Number(info.playerCount || info.players?.length || 1);
+  return `Active - ${count} ${count === 1 ? "player" : "players"}`;
+}
+
+function lobbyCardMeta(info) {
+  if (info?.active) return lobbyInfoSummary(info);
+  if (info) return "No host found. Tap to host this flower lobby.";
+  return "Tap anytime. If no host answers, you become host.";
+}
+
+function renderFlowerLobbies(results = new Map()) {
+  const list = $("#flower-lobby-list");
+  if (!list) return;
+  list.innerHTML = "";
+  for (const lobby of FLOWER_LOBBIES) {
+    const channel = flowerLobbyChannel(lobby);
+    const info = results.get(channel);
+    const button = document.createElement("button");
+    button.className = "flower-lobby-card";
+    button.type = "button";
+    button.style.setProperty("--flower", lobby.color);
+    button.dataset.channel = channel;
+    button.innerHTML = `
+      <span class="flower-art" aria-hidden="true">${esc(lobby.icon)}</span>
+      <span class="flower-lobby-content">
+        <span class="flower-lobby-name">${esc(lobby.name)}</span>
+        <span class="flower-lobby-status">${esc(lobbyStatusText(info))}</span>
+        <span class="flower-lobby-meta">${esc(lobbyCardMeta(info))}</span>
+      </span>
+    `;
+    button.onclick = () => joinFlowerLobby(lobby);
+    list.appendChild(button);
+  }
+}
+
+function lobbyInfoSummary(info) {
+  const names = (info.players || []).map((player) => player.name).filter(Boolean).slice(0, 3);
+  if (names.length) return `Host: ${info.hostName || names[0]} · ${names.join(", ")}`;
+  return info.hostName ? `Host: ${info.hostName}` : `Version ${info.version || "unknown"}`;
+}
+
+async function refreshFlowerLobbies() {
+  const token = ++lobbyScanToken;
+  const refresh = $("#btn-refresh-lobbies");
+  refresh?.setAttribute("disabled", "disabled");
+  setStatus("Checking flower lobbies...");
+  const results = new Map();
+  renderFlowerLobbies(results);
+  for (const lobby of FLOWER_LOBBIES) {
+    if (token !== lobbyScanToken) return;
+    const channel = flowerLobbyChannel(lobby);
+    const info = await net.probe(channel, LOBBY_SCAN_TIMEOUT_MS);
+    if (token !== lobbyScanToken) return;
+    results.set(channel, info);
+    renderFlowerLobbies(results);
+  }
+  refresh?.removeAttribute("disabled");
+  setStatus("Choose how to play.");
 }
 
 async function copyInviteLink() {
@@ -300,10 +410,12 @@ function wireManageControls() {
   if (host) host.onclick = hostNewLobby;
   const homeHost = $("#btn-home-host-lobby");
   if (homeHost) homeHost.onclick = hostNewLobby;
+  const solo = $("#btn-play-solo");
+  if (solo) solo.onclick = startSoloGame;
+  const refresh = $("#btn-refresh-lobbies");
+  if (refresh) refresh.onclick = refreshFlowerLobbies;
   const global = $("#btn-rejoin-global");
   if (global) global.onclick = rejoinGlobalLobby;
-  const play = $("#btn-play-global");
-  if (play) play.onclick = rejoinGlobalLobby;
   const join = $("#btn-join-lobby");
   if (join) join.onclick = joinLobbyFromCode;
   const homeJoin = $("#btn-home-join-lobby");
@@ -326,7 +438,34 @@ function startGame(initialState = null) {
 }
 
 function newLobbyChannel() {
-  return `${AUTO_CHANNEL}-${Math.random().toString(36).slice(2, 8)}`;
+  return randomLobbyCode().toLowerCase();
+}
+
+function startSoloGame() {
+  stopHostLoop();
+  stopHostWatchdog();
+  clearHandoffTimer();
+  clearClientWelcomeTimer();
+  net.destroy();
+  soloMode = true;
+  inLobby = false;
+  sessionChannel = "";
+  players.clear();
+  peerMap.clear();
+  usedColors.clear();
+  lastState = [];
+  lastHostOrder = [];
+  pendingGameState = null;
+  addPlayer(MY_ID, profile.name, null, profile.icon, profile.color);
+  lastState = [...players.values()];
+  lastHostOrder = [MY_ID];
+  updateLobbyUrl();
+  updateLobbyControls();
+  clearCachedGameState();
+  startGame(null);
+  renderPlayers();
+  show("play");
+  setStatus("Playing solo");
 }
 
 function leaveLobby() {
@@ -347,8 +486,11 @@ function leaveLobby() {
   activeGame = null;
   net.destroy();
   inLobby = false;
+  soloMode = false;
+  sessionChannel = "";
   showInviteAfterReady = false;
-  setStatus("Not in a lobby");
+  updateLobbyUrl();
+  setStatus("Choose how to play.");
   show("loading");
   updateLobbyControls();
   closeProfileSheet();
@@ -356,6 +498,7 @@ function leaveLobby() {
 
 function connectToLobby(channel, preferHost = false, openInviteWhenReady = false) {
   sessionChannel = normalizeLobbyChannel(channel);
+  soloMode = false;
   inLobby = true;
   handoffInProgress = false;
   clearHandoffTimer();
@@ -375,11 +518,22 @@ function hostNewLobby() {
   pendingGameState = null;
   activeGame?.destroy?.();
   activeGame = null;
-  connectToLobby(newLobbyChannel(), true, true);
+  const channel = newLobbyChannel();
+  const input = $("#input-home-lobby-code");
+  if (input) input.value = channel.toUpperCase();
+  connectToLobby(channel, true, true);
 }
 
 function rejoinGlobalLobby() {
   connectToLobby(AUTO_CHANNEL, false, false);
+}
+
+function joinFlowerLobby(lobby) {
+  clearCachedGameState();
+  pendingGameState = null;
+  activeGame?.destroy?.();
+  activeGame = null;
+  connectToLobby(flowerLobbyChannel(lobby), false, false);
 }
 
 function joinLobbyFromCode() {
@@ -455,6 +609,20 @@ function updateProfilePreview() {
 }
 
 function broadcastProfile() {
+  if (soloMode) {
+    const me = players.get(MY_ID);
+    if (!me) return;
+    usedColors.delete(me.color);
+    me.name = profile.name;
+    me.icon = profile.icon;
+    if (profile.color) me.color = profile.color;
+    usedColors.add(me.color);
+    myColor = me.color;
+    profiles.set(MY_ID, { name: me.name, color: me.color, icon: me.icon });
+    activeGame?.onPlayerList?.();
+    renderPlayers();
+    return;
+  }
   if (net.isHost) {
     const me = players.get(MY_ID);
     if (!me) return;
@@ -563,6 +731,7 @@ function queueStateForPeer(peerId) {
 
 function wireNetEvents() {
   net.on("ready", () => {
+    if (soloMode) return;
     inLobby = true;
     handoffInProgress = false;
     clearHandoffTimer();
@@ -597,6 +766,7 @@ function wireNetEvents() {
   });
 
   net.on("connected", () => {
+    if (soloMode) return;
     inLobby = true;
     handoffInProgress = false;
     clearHandoffTimer();
@@ -607,6 +777,11 @@ function wireNetEvents() {
     startClientWelcomeTimer();
     updateInvitePanel();
     updateLobbyControls();
+  });
+
+  net.on("lobby-probe", ({ reply, close }) => {
+    reply(lobbyInfoPayload());
+    setTimeout(close, 60);
   });
 
   net.on("peer-join", () => renderPlayers());
@@ -628,6 +803,7 @@ function wireNetEvents() {
   });
 
   net.on("host-closed", () => {
+    if (soloMode) return;
     beginHostHandoff("Host left. Rejoining...");
   });
 
@@ -639,6 +815,7 @@ function wireNetEvents() {
 
   net.on("error", (err) => {
     console.error(err);
+    if (soloMode) return;
     if (!inLobby || handoffInProgress) return;
     setStatus("Connection issue. Retrying...");
     beginHostHandoff("Connection issue. Rejoining...");
@@ -820,6 +997,12 @@ wireManageControls();
 wireNetEvents();
 registerServiceWorker();
 show("loading");
-setStatus("Finding a SimpleRain session...");
-net.auto(sessionChannel);
+renderFlowerLobbies();
+if (sessionChannel) {
+  setStatus("Finding a SimpleRain session...");
+  connectToLobby(sessionChannel, false, false);
+} else {
+  setStatus("Choose how to play.");
+  refreshFlowerLobbies();
+}
 render();

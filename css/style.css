@@ -65,6 +65,7 @@ input, textarea, select {
 .btn-primary { background: var(--accent); color: #06210f; }
 .btn-danger { background: #ff5d5d; color: #fff; }
 .btn-big { font-size: 1.4rem; padding: 18px 48px; border-radius: 18px; }
+.btn-small { font-size: 0.82rem; padding: 8px 12px; border-radius: 10px; }
 
 /* ===== Menu ===== */
 .divider {
@@ -100,11 +101,98 @@ input, textarea, select {
 .status { color: var(--accent2); min-height: 1.2em; margin: 4px 0 0; }
 
 .home-lobby-controls {
-  width: min(100%, 360px);
+  width: min(100%, 720px);
   display: flex;
   flex-direction: column;
   gap: 14px;
   align-items: stretch;
+  max-height: min(76vh, 760px);
+  overflow-y: auto;
+  padding: 0 2px 10px;
+}
+
+.home-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #2c2c44;
+  border-radius: 18px;
+  background: rgba(28, 28, 46, 0.55);
+}
+
+.home-section h2 {
+  margin: 0;
+  font-size: 1rem;
+  text-align: left;
+}
+
+.home-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.flower-lobby-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.flower-lobby-card {
+  min-height: 116px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--flower), transparent 45%);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 18% 18%, color-mix(in srgb, var(--flower), transparent 55%), transparent 42%),
+    linear-gradient(135deg, rgba(28, 28, 46, 0.96), rgba(12, 20, 32, 0.92));
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.flower-lobby-card:active { transform: scale(0.98); }
+
+.flower-art {
+  width: 58px;
+  height: 58px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--flower), transparent 18%);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--flower), transparent 82%);
+  font-size: 2rem;
+}
+
+.flower-lobby-content {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.flower-lobby-name {
+  font-size: 1.05rem;
+  font-weight: 900;
+}
+
+.flower-lobby-status {
+  color: var(--accent2);
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.flower-lobby-meta {
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.25;
 }
 
 .home-secondary-actions {
@@ -118,6 +206,8 @@ input, textarea, select {
   grid-template-columns: 1fr auto;
   gap: 10px;
 }
+
+.home-join-code input { text-transform: uppercase; }
 
 .home-profile-btn {
   position: fixed;
@@ -945,4 +1035,10 @@ input, textarea, select {
   padding: 0;
   font-size: 1.2rem;
   flex-shrink: 0;
+}
+
+@media (max-width: 560px) {
+  .flower-lobby-list { grid-template-columns: 1fr; }
+  .screen { padding: 18px; }
+  .home-lobby-controls { max-height: min(78vh, 720px); }
 }
