@@ -113,54 +113,33 @@ input, textarea, select {
 }
 .status { color: var(--accent2); min-height: 1.2em; margin: 4px 0 0; }
 
-.online-lily-row {
+.home-online-pills {
   width: min(100%, 720px);
-  min-height: 74px;
+  min-height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
   margin-bottom: 2px;
 }
 
-.online-lily-pad {
-  position: relative;
-  min-width: 58px;
-  min-height: 52px;
+.online-player-pill {
   border: none;
-  border-radius: 52% 48% 55% 45%;
-  background: radial-gradient(circle at 35% 32%, #79f0a2, #2a9f62 72%);
-  color: #092415;
-  font-weight: 900;
   cursor: pointer;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.28), inset -8px -6px 0 rgba(0, 0, 0, 0.14);
-  display: inline-flex;
-  flex-direction: column;
+  display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 1px;
-  padding: 7px 10px;
-  transform: rotate(-2deg);
+  gap: 8px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 8px 14px;
+  border-radius: 20px;
+  font: inherit;
 }
 
-.online-lily-pad:nth-child(even) { transform: rotate(3deg); }
-.online-lily-pad:active { transform: scale(0.96); }
-.online-lily-pad::after {
-  content: "";
-  position: absolute;
-  right: 8px;
-  top: 4px;
-  width: 16px;
-  height: 18px;
-  background: var(--bg);
-  clip-path: polygon(100% 0, 0 45%, 100% 100%);
-  opacity: 0.85;
-}
-
-.online-lily-icon { font-size: 1.35rem; line-height: 1; }
-.online-lily-name { max-width: 74px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.68rem; }
-.online-lily-empty { color: var(--muted); font-size: 0.86rem; }
+.online-player-pill:active { transform: scale(0.96); }
+.online-player-pill:disabled { cursor: default; opacity: 0.72; }
+.online-player-pill:disabled:active { transform: none; }
 
 .home-lobby-controls {
   width: min(100%, 720px);

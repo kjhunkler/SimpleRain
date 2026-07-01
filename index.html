@@ -13,7 +13,7 @@
 <body>
   <div id="app">
     <section id="screen-loading" class="screen active">
-      <div id="home-online-pads" class="online-lily-row" aria-label="Online players"></div>
+      <div id="home-online-pads" class="home-online-pills" aria-label="Online players"></div>
       <h1 class="title">Simple<span>Rain</span></h1>
       <p class="tagline">A quiet pond game for solo play or shared lobbies.</p>
       <p id="connection-status" class="status">Choose how to play.</p>
@@ -35,9 +35,7 @@
           </div>
         </section>
       </div>
-      <button id="btn-home-profile" class="profile-menu-btn home-profile-btn" aria-label="Edit profile" type="button">
-        <span id="home-profile-dot" class="menu-profile-dot"></span>
-      </button>
+      <button id="btn-home-profile" class="player-profile-btn home-profile-btn" aria-label="Edit profile" type="button"></button>
     </section>
 
     <section id="screen-play" class="screen">
@@ -85,41 +83,11 @@
       <div id="sheet-online-players" class="online-player-list"></div>
     </div>
     <div class="manage-group">
-      <h3>Lobby</h3>
-      <div id="lobby-active-controls" class="lobby-controls">
-        <div class="invite-panel" aria-label="Lobby invite">
-          <div class="invite-code-row">
-            <span>Invite Code</span>
-            <strong id="invite-code">simple-rain</strong>
-          </div>
-          <div class="invite-qr-wrap">
-            <img id="invite-qr" class="invite-qr" alt="Lobby invite QR code" />
-          </div>
-          <label class="invite-link-label" for="invite-link">Invite Link</label>
-          <input id="invite-link" class="text-input invite-link-input" type="text" readonly />
-          <div class="invite-actions">
-            <button id="btn-copy-invite" class="manage-btn" type="button">Copy Link</button>
-            <button id="btn-share-invite" class="manage-btn" type="button">Share via Text</button>
-          </div>
-        </div>
-        <button id="btn-request-host" class="manage-btn" type="button">Request Host</button>
-        <button id="btn-relinquish-host" class="manage-btn hidden" type="button">Relinquish Host</button>
-      </div>
+      <h3>Game</h3>
       <div id="lobby-options-controls" class="lobby-controls">
-        <h3>Other Options</h3>
         <button id="btn-music" class="manage-btn" aria-label="Mute music" type="button" aria-pressed="false">Music On</button>
         <button id="btn-reset" class="manage-btn" type="button">Reset Game</button>
         <button id="btn-leave-lobby" class="manage-btn danger" type="button">Leave Lobby</button>
-      </div>
-      <div id="lobby-left-controls" class="lobby-controls hidden">
-        <p class="lobby-left-message">You left the lobby. Host a new lobby, rejoin the global lobby, or join with an invite code.</p>
-        <button id="btn-host-lobby" class="manage-btn" type="button">Host New Lobby</button>
-        <button id="btn-rejoin-global" class="manage-btn" type="button">Rejoin Global Lobby</button>
-        <div class="field-group lobby-code-group">
-          <label for="input-lobby-code">Invite Code</label>
-          <input id="input-lobby-code" class="text-input" type="text" autocomplete="off" inputmode="text" placeholder="simple-rain" />
-        </div>
-        <button id="btn-join-lobby" class="manage-btn" type="button">Join Invite Code</button>
       </div>
     </div>
     <div class="manage-group app-update-group">
@@ -131,8 +99,8 @@
   </div>
 
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <script src="js/peer-net.js?v=1.1.7"></script>
-  <script src="js/games/simple-rain.js?v=1.1.7"></script>
-  <script src="js/app.js?v=1.1.7"></script>
+  <script src="js/peer-net.js?v=1.1.8"></script>
+  <script src="js/games/simple-rain.js?v=1.1.8"></script>
+  <script src="js/app.js?v=1.1.8"></script>
 </body>
 </html>

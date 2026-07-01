@@ -1,4 +1,4 @@
-const APP_VERSION = "1.1.7";
+const APP_VERSION = "1.1.8";
 const CACHE_NAME = `simplerain-${APP_VERSION}`;
 const APP_SHELL = [
   "./",

@@ -1,6 +1,6 @@
 /* SimpleRain app shell: auto host/join, profile editing, host-owned game state. */
 
-const APP_VERSION = "1.1.7";
+const APP_VERSION = "1.1.8";
 const AUTO_CHANNEL = "simple-rain";
 const GAME_SAVE_KEY = "simplerain-host-cache";
 const MUSIC_MUTED_KEY = "simplerain-music-muted";
@@ -290,6 +290,10 @@ function presenceStatusText(entry) {
   return "On the home screen";
 }
 
+function presenceHostId(entry) {
+  return entry.status === "hosting" ? entry.id : null;
+}
+
 function renderPresence() {
   const entries = [...presenceRoster.values()]
     .filter((entry) => entry.id !== MY_ID)
@@ -297,21 +301,20 @@ function renderPresence() {
   const home = $("#home-online-pads");
   if (home) {
     home.innerHTML = "";
-    if (!entries.length) {
-      const empty = document.createElement("span");
-      empty.className = "online-lily-empty";
-      empty.textContent = "No friends online yet";
-      home.appendChild(empty);
-    } else {
-      for (const entry of entries.slice(0, 10)) {
-        const button = document.createElement("button");
-        button.className = "online-lily-pad";
-        button.type = "button";
-        button.title = `${entry.name} - ${presenceStatusText(entry)}`;
-        button.innerHTML = `<span class="online-lily-icon">${esc(displayIcon(entry.icon))}</span><span class="online-lily-name">${esc(entry.name)}</span>`;
-        button.onclick = () => invitePresencePlayer(entry.id);
-        home.appendChild(button);
-      }
+    for (const entry of entries.slice(0, 10)) {
+      const button = document.createElement("button");
+      button.className = "online-player-pill";
+      button.type = "button";
+      button.title = `${entry.name} - ${presenceStatusText(entry)}`;
+      button.innerHTML = playerPillHtml({
+        id: entry.id,
+        name: entry.name,
+        color: entry.color || COLORS[0],
+        icon: entry.icon,
+      }, presenceHostId(entry));
+      button.disabled = entry.status !== "hosting" || !entry.lobby;
+      button.onclick = () => joinPresencePlayer(entry.id);
+      home.appendChild(button);
     }
   }
 
@@ -360,7 +363,6 @@ function inviteLobbyChannel() {
   const input = $("#input-home-lobby-code");
   const channel = normalizeLobbyChannel(input?.value || newLobbyChannel());
   if (input) input.value = channel.toUpperCase().slice(0, 4);
-  clearCachedGameState();
   pendingGameState = null;
   activeGame?.destroy?.();
   activeGame = null;
@@ -568,15 +570,20 @@ function renderPlayers() {
     li.innerHTML = playerPillHtml(player, hostId);
     list.appendChild(li);
   }
-  renderProfileButton(hostId);
+  renderProfileButtons(hostId);
 }
 
-function renderProfileButton(hostId = soloMode ? null : net.isHost ? MY_ID : lastHostOrder[0]) {
-  const button = $("#btn-profile");
+function renderProfileButton(hostId = soloMode ? null : net.isHost ? MY_ID : lastHostOrder[0], selector = "#btn-profile") {
+  const button = $(selector);
   if (!button) return;
   const player = currentPlayer();
   button.classList.toggle("host-player", player.id === hostId);
   button.innerHTML = playerPillHtml(player, hostId);
+}
+
+function renderProfileButtons(hostId = soloMode ? null : net.isHost ? MY_ID : lastHostOrder[0]) {
+  renderProfileButton(hostId, "#btn-profile");
+  renderProfileButton(hostId, "#btn-home-profile");
 }
 
 function loadCachedGameState() {
@@ -671,8 +678,6 @@ function updateLobbyControls() {
   $("#lobby-active-controls")?.classList.toggle("hidden", !playing);
   $("#lobby-left-controls")?.classList.toggle("hidden", playing);
   $("#home-lobby-controls")?.classList.toggle("hidden", false);
-  const code = $("#input-lobby-code");
-  if (code && !code.value) code.value = sessionChannel;
   const homeCode = $("#input-home-lobby-code");
   if (homeCode && !homeCode.value && sessionChannel) homeCode.value = sessionChannel;
   updateHostControlButtons();
@@ -948,10 +953,6 @@ function wireManageControls() {
   if (refresh) refresh.onclick = refreshFlowerLobbies;
   const refreshCache = $("#btn-refresh-cache");
   if (refreshCache) refreshCache.onclick = refreshCachedPwaFiles;
-  const global = $("#btn-rejoin-global");
-  if (global) global.onclick = rejoinGlobalLobby;
-  const join = $("#btn-join-lobby");
-  if (join) join.onclick = joinLobbyFromCode;
   const homeJoin = $("#btn-home-join-lobby");
   if (homeJoin) homeJoin.onclick = joinLobbyFromHomeCode;
 }
@@ -1083,7 +1084,6 @@ function connectToLobby(channel, preferHost = false, openInviteWhenReady = false
 }
 
 function hostNewLobby() {
-  clearCachedGameState();
   pendingGameState = null;
   activeGame?.destroy?.();
   activeGame = null;
@@ -1098,7 +1098,6 @@ function rejoinGlobalLobby() {
 }
 
 function joinFlowerLobby(lobby) {
-  clearCachedGameState();
   pendingGameState = null;
   activeGame?.destroy?.();
   activeGame = null;
@@ -1183,7 +1182,7 @@ function updateProfilePreview() {
     menuDot.textContent = displayIcon(profile.icon);
     menuDot.title = profile.name;
   }
-  renderProfileButton();
+  renderProfileButtons();
   const homeDot = $("#home-profile-dot");
   if (homeDot) {
     homeDot.style.background = color;
