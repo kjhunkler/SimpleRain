@@ -7,8 +7,10 @@ const MUSIC_MUTED_KEY = "simplerain-music-muted";
 const LOBBY_PARAM = "lobby";
 const LOBBY_SCAN_TIMEOUT_MS = 2600;
 const LOBBY_REFRESH_COOLDOWN_MS = 4000;
-const PLAYER_HEARTBEAT_MS = 15000;
-const HOST_WATCHDOG_MS = Math.max(45000, PLAYER_HEARTBEAT_MS * 3);
+const PLAYER_HEARTBEAT_MS = 5000;
+const HOST_THROTTLE_CHECK_MS = 5000;
+const HOST_THROTTLE_DRIFT_MS = 12000;
+const HOST_WATCHDOG_MS = 15000;
 const CLIENT_WELCOME_TIMEOUT_MS = 10000;
 const COLORS = ["#ff5d5d", "#ff9d4d", "#ffd24d", "#7CFC9B", "#33ddaa", "#4dd2ff", "#4d8bff", "#7766ff", "#c98cff", "#ff6fd0", "#22cc88", "#ff6600"];
 const ICONS = ["🐸", "🐢", "🐟", "🦆", "🦋", "🐞", "🐝", "🦗", "🦎", "🐌", "🦀", "🦊", "🐰", "🦝", "🦉", "🐿️"];
@@ -33,6 +35,8 @@ let net = new PeerNet();
 let activeGame = null;
 let hostLoopTimer = null;
 let hostWatchdogTimer = null;
+let hostThrottleTimer = null;
+let hostThrottleExpectedAt = 0;
 let handoffTimer = null;
 let clientWelcomeTimer = null;
 let lastPlayersBroadcastAt = 0;
@@ -50,6 +54,7 @@ let sessionChannel = initialLobbyChannel();
 let showInviteAfterReady = false;
 let inLobby = false;
 let soloMode = false;
+let hostReachability = "solo";
 let lobbyScanToken = 0;
 let lastLobbyRefreshAttemptAt = 0;
 
@@ -154,6 +159,14 @@ function setStatus(text) {
   statusText = text;
   const el = $("#connection-status");
   if (el) el.textContent = text;
+}
+
+function setHostReachability(value) {
+  hostReachability = value;
+  if (!net.isHost) return;
+  if (value === "confirmed") setStatus("Hosting SimpleRain - reachable");
+  else if (value === "suspect") setStatus("Hosting SimpleRain - connection may be throttled");
+  else setStatus("Hosting SimpleRain - waiting for first connection");
 }
 
 function displayIcon(icon) {
@@ -318,6 +331,7 @@ function lobbyInfoPayload() {
     playerCount: visible.length || players.size || 1,
     players: visible.map((player) => ({ id: player.id, name: player.name, icon: player.icon, color: player.color })),
     isHost: net.isHost,
+    reachability: hostReachability,
     version: APP_VERSION,
   };
 }
@@ -362,8 +376,9 @@ function renderFlowerLobbies(results = new Map()) {
 
 function lobbyInfoSummary(info) {
   const names = (info.players || []).map((player) => player.name).filter(Boolean).slice(0, 3);
-  if (names.length) return `Host: ${info.hostName || names[0]} · ${names.join(", ")}`;
-  return info.hostName ? `Host: ${info.hostName}` : `Version ${info.version || "unknown"}`;
+  const reachability = info.reachability === "confirmed" ? "reachable" : info.reachability === "suspect" ? "suspect" : "unconfirmed";
+  if (names.length) return `Host: ${info.hostName || names[0]} · ${reachability} · ${names.join(", ")}`;
+  return info.hostName ? `Host: ${info.hostName} · ${reachability}` : `Version ${info.version || "unknown"}`;
 }
 
 async function refreshFlowerLobbies() {
@@ -516,6 +531,7 @@ function continueSavedGame() {
 
 function startLocalGame(initialState, fresh, status) {
   stopHostLoop();
+  stopHostThrottleMonitor();
   stopHostWatchdog();
   clearHandoffTimer();
   clearClientWelcomeTimer();
@@ -523,6 +539,7 @@ function startLocalGame(initialState, fresh, status) {
   soloMode = true;
   inLobby = false;
   sessionChannel = "";
+  hostReachability = "solo";
   players.clear();
   peerMap.clear();
   usedColors.clear();
@@ -566,6 +583,7 @@ function leaveLobby() {
   inLobby = false;
   soloMode = false;
   sessionChannel = "";
+  hostReachability = "solo";
   showInviteAfterReady = false;
   updateLobbyUrl();
   enterHomeScreen(true);
@@ -575,6 +593,7 @@ function leaveLobby() {
 function connectToLobby(channel, preferHost = false, openInviteWhenReady = false) {
   sessionChannel = normalizeLobbyChannel(channel);
   soloMode = false;
+  hostReachability = "unconfirmed";
   inLobby = true;
   handoffInProgress = false;
   clearHandoffTimer();
@@ -747,6 +766,31 @@ function stopHostLoop() {
   hostLoopTimer = null;
 }
 
+function startHostThrottleMonitor() {
+  stopHostThrottleMonitor();
+  hostThrottleExpectedAt = Date.now() + HOST_THROTTLE_CHECK_MS;
+  hostThrottleTimer = setInterval(() => {
+    const now = Date.now();
+    const drift = now - hostThrottleExpectedAt;
+    hostThrottleExpectedAt = now + HOST_THROTTLE_CHECK_MS;
+    if (!net.isHost || !document.hidden || drift < HOST_THROTTLE_DRIFT_MS) return;
+    console.warn(`Host tab timer throttling detected (${Math.round(drift)}ms drift).`);
+    setHostReachability("suspect");
+    broadcastPlayers(true);
+    const state = snapshotGame();
+    if (state) {
+      saveCachedGameState(state);
+      broadcastGameState(state);
+    }
+  }, HOST_THROTTLE_CHECK_MS);
+}
+
+function stopHostThrottleMonitor() {
+  clearInterval(hostThrottleTimer);
+  hostThrottleTimer = null;
+  hostThrottleExpectedAt = 0;
+}
+
 function clearHandoffTimer() {
   clearTimeout(handoffTimer);
   handoffTimer = null;
@@ -788,6 +832,7 @@ function beginHostHandoff(message) {
   const preferHost = myIndex === 0;
   const delay = myIndex < 0 ? 300 : myIndex * 700;
   stopHostLoop();
+  stopHostThrottleMonitor();
   stopHostWatchdog();
   clearHandoffTimer();
   handoffTimer = setTimeout(() => net.migrate(sessionChannel, preferHost), delay);
@@ -819,7 +864,7 @@ function wireNetEvents() {
     clearHandoffTimer();
     clearClientWelcomeTimer();
     stopHostWatchdog();
-    setStatus("Hosting SimpleRain");
+    setHostReachability(hostReachability === "confirmed" ? "confirmed" : "unconfirmed");
     players.clear();
     peerMap.clear();
     usedColors.clear();
@@ -836,6 +881,7 @@ function wireNetEvents() {
     lastState = [...players.values()];
     lastHostOrder = [...players.keys()];
     startHostLoop();
+    startHostThrottleMonitor();
     ensureGameStarted(pendingGameState || loadCachedGameState());
     renderPlayers();
     show("play");
@@ -907,6 +953,7 @@ function wireNetEvents() {
 function handleHostMessage(peerId, msg) {
   if (msg.t === "hello") {
     const player = addPlayer(msg.id, msg.name, peerId, msg.icon, msg.preferredColor);
+    setHostReachability("confirmed");
     net.sendTo(peerId, { t: "welcome", color: player.color });
     net.sendTo(peerId, { t: "players", players: [...players.values()], hostOrder: [...players.keys()] });
     queueStateForPeer(peerId);
@@ -977,6 +1024,8 @@ function handleClientMessage(msg) {
     renderPlayers();
   } else if (msg.t === "game-state") {
     handleGameState(msg.state);
+  } else if (msg.t === "host-exiting") {
+    beginHostHandoff("Host left. Rejoining...");
   }
 }
 
@@ -996,6 +1045,37 @@ async function registerServiceWorker() {
 }
 
 navigator.serviceWorker?.addEventListener("controllerchange", () => location.reload());
+
+function destroyPeerForPageExit(reason) {
+  if (!net.isHost) return;
+  try {
+    const state = snapshotGame();
+    if (state) saveCachedGameState(state);
+    net.broadcast({ t: "host-exiting", reason });
+  } catch {}
+  try { net.destroy(); } catch {}
+}
+
+function wirePageLifecycle() {
+  window.addEventListener("pagehide", () => destroyPeerForPageExit("pagehide"), { capture: true });
+  window.addEventListener("beforeunload", () => destroyPeerForPageExit("beforeunload"), { capture: true });
+  document.addEventListener("freeze", () => destroyPeerForPageExit("freeze"));
+  document.addEventListener("visibilitychange", () => {
+    if (!net.isHost) return;
+    if (document.hidden) {
+      broadcastPlayers(true);
+      const state = snapshotGame();
+      if (state) {
+        saveCachedGameState(state);
+        broadcastGameState(state);
+      }
+      return;
+    }
+    setStatus("Hosting SimpleRain");
+    lastPlayersBroadcastAt = 0;
+    broadcastPlayers(true);
+  });
+}
 
 function syncCanvasSize() {
   const rect = canvas.getBoundingClientRect();
@@ -1082,6 +1162,7 @@ updateContinueButton();
 wireManageControls();
 
 wireNetEvents();
+wirePageLifecycle();
 registerServiceWorker();
 renderFlowerLobbies();
 enterHomeScreen(true);
