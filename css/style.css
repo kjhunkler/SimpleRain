@@ -390,7 +390,7 @@ input, textarea, select {
 
 .play-menu-bar .player-list {
   flex: 1 1 auto;
-  justify-content: flex-start;
+  justify-content: flex-end;
 }
 
 .session-pill {
@@ -449,6 +449,22 @@ input, textarea, select {
 }
 
 .profile-menu-btn:active { transform: scale(0.92); }
+
+.player-profile-btn {
+  flex: 0 0 auto;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 8px 14px;
+  border-radius: 20px;
+  font: inherit;
+}
+
+.player-profile-btn:active { transform: scale(0.92); }
 
 .menu-profile-dot {
   width: 44px;

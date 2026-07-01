@@ -542,19 +542,41 @@ function getVisiblePlayers() {
   return soloMode || net.isHost ? [...players.values()] : lastState;
 }
 
+function currentPlayer() {
+  return getVisiblePlayers().find((player) => player.id === MY_ID) || {
+    id: MY_ID,
+    name: profile.name,
+    color: profile.color || myColor || COLORS[0],
+    icon: profile.icon,
+  };
+}
+
+function playerPillHtml(player, hostId) {
+  const crown = player.id === hostId ? `<span class="host-crown" aria-hidden="true">♛</span>` : "";
+  return `<span class="swatch" style="background:${player.color}">${crown}${esc(displayIcon(player.icon))}</span>${esc(player.name)}`;
+}
+
 function renderPlayers() {
   const list = $("#player-list");
   if (!list) return;
   const visible = getVisiblePlayers();
   const hostId = soloMode ? null : net.isHost ? MY_ID : lastHostOrder[0];
   list.innerHTML = "";
-  for (const player of visible) {
+  for (const player of visible.filter((player) => player.id !== MY_ID)) {
     const li = document.createElement("li");
-    const crown = player.id === hostId ? `<span class="host-crown" aria-hidden="true">♛</span>` : "";
     li.classList.toggle("host-player", player.id === hostId);
-    li.innerHTML = `<span class="swatch" style="background:${player.color}">${crown}${esc(displayIcon(player.icon))}</span>${esc(player.name)}`;
+    li.innerHTML = playerPillHtml(player, hostId);
     list.appendChild(li);
   }
+  renderProfileButton(hostId);
+}
+
+function renderProfileButton(hostId = soloMode ? null : net.isHost ? MY_ID : lastHostOrder[0]) {
+  const button = $("#btn-profile");
+  if (!button) return;
+  const player = currentPlayer();
+  button.classList.toggle("host-player", player.id === hostId);
+  button.innerHTML = playerPillHtml(player, hostId);
 }
 
 function loadCachedGameState() {
@@ -1161,6 +1183,7 @@ function updateProfilePreview() {
     menuDot.textContent = displayIcon(profile.icon);
     menuDot.title = profile.name;
   }
+  renderProfileButton();
   const homeDot = $("#home-profile-dot");
   if (homeDot) {
     homeDot.style.background = color;
