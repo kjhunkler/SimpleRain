@@ -5,6 +5,8 @@
   "use strict";
 
   const SNAPSHOT_HEARTBEAT_MS = 2500;
+  const SNAPSHOT_KEEPALIVE_MS = 10000;
+  const RENDER_FRAME_MS = 1000 / 30;
   const PERF_LOG_INTERVAL_MS = 5000;
   const TILE_VALIDATION_INTERVAL_MS = 2400;
   const ENJOYMENT_MESSAGE_CHANCE = 0.28;
@@ -349,7 +351,24 @@
     const drops = [];
     const ripples = [];
     const particles = [];
-    const perf = { frames: 0, drawMs: 0, effectsMs: 0, snapshotMs: 0, snapshots: 0 };
+    const perf = { frames: 0, drawMs: 0, effectsMs: 0, layoutMs: 0, snapshotMs: 0, snapshots: 0 };
+    let frameTimer = null;
+    let nextFrameAt = 0;
+    let boardVersion = 0;
+    let cachedBounds = null;
+    let cachedBoundsVersion = -1;
+    let cachedEntries = null;
+    let cachedEntriesVersion = -1;
+    let cachedLegal = null;
+    let pondSyncVersion = -1;
+    let stateVersion = 1;
+    let sentStateVersion = 0;
+    let lastFullSnapshotAt = 0;
+    const cachedRect = { width: 0, height: 0, checkedAt: -Infinity };
+    const bgLayer = { canvas: null, w: 0, h: 0 };
+    const vignetteLayer = { canvas: null, w: 0, h: 0 };
+    const headerLayer = { canvas: null, key: "" };
+    const tileSprites = new Map();
 
     const state = {
       board: {},
@@ -685,7 +704,7 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
     function validateRemainingTiles() {
       if (!isHost()) return;
       const changed = reconcileActivePlayerTiles();
-      if (changed) host.broadcastState(makeSnapshot());
+      if (changed) broadcastAuthoritativeState();
     }
 
     function dealEvenly(pool = liveTilePool()) {
@@ -787,6 +806,7 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       const deck = shuffleTiles(makeTiles());
       const start = deck.shift();
       state.board = { [key(0, 0)]: { tile: start, rot: 0, owner: "system", turn: 0 } };
+      boardVersion++;
       state.deck = deck;
       state.hands = {};
       state.currentByPlayer = {};
@@ -898,6 +918,7 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       const placement = current && rotOverride !== null ? { ...current, rot: normalizedTileRot(rotOverride) } : current;
       if (!placement || state.over || !legalAt(x, y, placement)) return;
       state.board[key(x, y)] = { tile: placement.tile, rot: placement.rot || 0, owner: id, turn: state.turn++ };
+      boardVersion++;
       const p = boardToNorm(x, y);
       emitEvent("place", p.x, p.y, "#dff9ff");
       tryCompleteSquares(x, y);
@@ -934,6 +955,12 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       drawAnim = { tileId: tile.id, start: now(), duration: 420 };
     }
 
+    function broadcastAuthoritativeState() {
+      stateVersion++;
+      host.broadcastState(makeSnapshot());
+      sentStateVersion = stateVersion;
+    }
+
     function handleAction(id, input) {
       if (!isHost() || !input || typeof input !== "object") return;
       if (input.type === "rotate" && currentFor(id) && !state.over) {
@@ -950,7 +977,7 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
         resetHostState();
       }
       if (input.type === "rotate" || input.type === "place") maybeEnjoymentMessage();
-      host.broadcastState(makeSnapshot());
+      broadcastAuthoritativeState();
     }
 
     function sendAction(input) {
@@ -1020,6 +1047,7 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
           fps: Math.round(perf.frames / seconds),
           drawMsPerFrame: +(perf.drawMs / Math.max(1, perf.frames)).toFixed(2),
           effectsMsPerFrame: +(perf.effectsMs / Math.max(1, perf.frames)).toFixed(2),
+          layoutMsPerFrame: +(perf.layoutMs / Math.max(1, perf.frames)).toFixed(2),
           snapshotMsPerSnapshot: +(perf.snapshotMs / Math.max(1, perf.snapshots)).toFixed(2),
           snapshotsPerSecond: +(perf.snapshots / seconds).toFixed(1),
           remotePeers: host.getPlayers().filter((p) => p.id !== myId).length,
@@ -1029,6 +1057,7 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       perf.frames = 0;
       perf.drawMs = 0;
       perf.effectsMs = 0;
+      perf.layoutMs = 0;
       perf.snapshotMs = 0;
       perf.snapshots = 0;
     }
@@ -1046,12 +1075,25 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       state.over = !!snapshot.over;
       state.won = !!snapshot.won;
       state.message = snapshot.message || "Listen to the rain and place the next tile.";
+      boardVersion++;
       applyEvents(snapshot.events);
       syncDragRotation();
     }
 
-    function ensureCanvasSize() {
+    function refreshCanvasRect() {
       const rect = canvas.getBoundingClientRect();
+      cachedRect.width = rect.width;
+      cachedRect.height = rect.height;
+      cachedRect.checkedAt = now();
+      return cachedRect;
+    }
+
+    function cssWidth() { return cachedRect.width || canvas.clientWidth || 0; }
+    function cssHeight() { return cachedRect.height || canvas.clientHeight || 0; }
+
+    function ensureCanvasSize() {
+      if (now() - cachedRect.checkedAt >= 500) refreshCanvasRect();
+      const rect = cachedRect;
       const dpr = window.devicePixelRatio || 1;
       const w = Math.max(1, Math.round(rect.width * dpr));
       const h = Math.max(1, Math.round(rect.height * dpr));
@@ -1066,21 +1108,28 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       return !changed || rect.width > 0;
     }
 
-    function resize() { ensureCanvasSize(); }
+    function resize() { refreshCanvasRect(); ensureCanvasSize(); }
 
     function boardBounds() {
+      if (cachedBoundsVersion === boardVersion && cachedBounds) return cachedBounds;
       const pts = Object.keys(state.board).map(parseKey);
       for (const p of Object.keys(state.board).map(parseKey)) {
         for (const d of DIRS) pts.push({ x: p.x + d.dx, y: p.y + d.dy });
       }
       for (const b of state.blossoms) pts.push({ x: Math.floor(b.x), y: Math.floor(b.y) });
-      if (!pts.length) return { minX: -2, maxX: 2, minY: -2, maxY: 2 };
-      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-      for (const p of pts) {
-        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
-        minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+      let result;
+      if (!pts.length) result = { minX: -2, maxX: 2, minY: -2, maxY: 2 };
+      else {
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (const p of pts) {
+          minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+          minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+        }
+        result = { minX: minX - 1, maxX: maxX + 1, minY: minY - 1, maxY: maxY + 1 };
       }
-      return { minX: minX - 1, maxX: maxX + 1, minY: minY - 1, maxY: maxY + 1 };
+      cachedBounds = result;
+      cachedBoundsVersion = boardVersion;
+      return result;
     }
 
     function layout(W, H) {
@@ -1205,7 +1254,10 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
     }
 
     function updatePondLife(dt) {
-      syncPondLife();
+      if (pondSyncVersion !== boardVersion) {
+        syncPondLife();
+        pondSyncVersion = boardVersion;
+      }
       const t = now();
       const step = Math.min(3, Math.max(0.2, dt / 16.67));
       for (const e of pond.entities) {
@@ -2333,7 +2385,9 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       if (!ensureCanvasSize()) return;
       const W = canvas.clientWidth;
       const H = canvas.clientHeight;
+      const layoutStart = now();
       layout(W, H);
+      perf.layoutMs += now() - layoutStart;
       ctx.clearRect(0, 0, W, H);
       drawBackground(W, H);
       drawHeader(W);
@@ -2518,21 +2572,56 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       view.zoom = nextZoom;
     }
 
-    function loop(ts) {
+    function scheduleNextFrame(ts) {
+      if (frameTimer !== null || rafId) return;
+      nextFrameAt = Math.max(ts + RENDER_FRAME_MS / 2, nextFrameAt + RENDER_FRAME_MS);
+      const delay = Math.max(0, Math.min(RENDER_FRAME_MS, nextFrameAt - ts));
+      frameTimer = setTimeout(() => {
+        frameTimer = null;
+        rafId = requestAnimationFrame(loop);
+      }, delay);
+    }
+
+    function startLoop() {
+      if (rafId || frameTimer !== null || document.hidden) return;
+      lastTs = 0;
+      nextFrameAt = 0;
       rafId = requestAnimationFrame(loop);
+    }
+
+    function stopLoop() {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = 0;
+      if (frameTimer !== null) {
+        clearTimeout(frameTimer);
+        frameTimer = null;
+      }
+    }
+
+    function onVisibilityChange() {
+      if (document.hidden) stopLoop();
+      else startLoop();
+    }
+
+    function loop(ts) {
+      rafId = 0;
       if (!lastTs) lastTs = ts;
       const frameMs = ts - lastTs;
       lastTs = ts;
       if (isHost() && hasRemotePeers() && ts - lastSnapshotAt >= SNAPSHOT_HEARTBEAT_MS) {
         lastSnapshotAt = ts;
-        host.broadcastState(timedSnapshot());
+        if (stateVersion !== sentStateVersion || ts - lastFullSnapshotAt >= SNAPSHOT_KEEPALIVE_MS) {
+          lastFullSnapshotAt = ts;
+          sentStateVersion = stateVersion;
+          host.broadcastState(timedSnapshot());
+        }
       }
       if (isHost() && ts - lastValidationAt >= TILE_VALIDATION_INTERVAL_MS) {
         lastValidationAt = ts;
         validateRemainingTiles();
       }
       const effectsStart = now();
-      updateEffects(frameMs || 16, canvas.clientWidth, canvas.clientHeight);
+      updateEffects(frameMs || 16, cssWidth(), cssHeight());
       updatePondLife(frameMs || 16);
       perf.effectsMs += now() - effectsStart;
       const drawStart = now();
@@ -2540,6 +2629,7 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       perf.drawMs += now() - drawStart;
       perf.frames++;
       logPerf(ts);
+      scheduleNextFrame(ts);
     }
 
     return {
@@ -2569,10 +2659,12 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
           canvas.addEventListener("wheel", onWheel, { passive: false });
         }
         window.addEventListener("keydown", onKeyDown);
-        rafId = requestAnimationFrame(loop);
+        document.addEventListener("visibilitychange", onVisibilityChange);
+        startLoop();
       },
       destroy() {
-        cancelAnimationFrame(rafId);
+        stopLoop();
+        document.removeEventListener("visibilitychange", onVisibilityChange);
         stopMusic();
         stopMusicPreview();
         if (activePointerId !== null && canvas.hasPointerCapture?.(activePointerId)) canvas.releasePointerCapture(activePointerId);
@@ -2602,7 +2694,7 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       onPeerInput(id, input) { handleAction(id, input); },
       onState(snapshot) { applySnapshot(snapshot); },
       getSnapshot() { return currentSnapshot(); },
-      onPlayerList() { if (isHost()) { reconcileActivePlayerTiles(); host.broadcastState(makeSnapshot()); } },
+      onPlayerList() { if (isHost()) { reconcileActivePlayerTiles(); broadcastAuthoritativeState(); } },
       setMusicMuted(muted) {
         if (musicGain) musicGain.gain.setTargetAtTime(muted ? 0 : 1, audioCtx.currentTime, muted ? 0.25 : 0.6);
         if (muted) stopMusic();
