@@ -293,6 +293,62 @@
     return text;
   }
 
+  // ---- notation & clocks ---------------------------------------------------
+
+  const CLOCK_BANK_MS = 10 * 60 * 1000;
+
+  function sanForMove(st, move) {
+    const letter = st.board[move.from];
+    const type = letter.toLowerCase();
+    if (move.castle) return move.castle === "k" ? "O-O" : "O-O-O";
+    const target = squareName(move.to);
+    const capture = !!st.board[move.to] || !!move.ep;
+    if (type === "p") {
+      let san = capture ? FILES[move.from % 8] + "x" + target : target;
+      if (move.promo) san += "=" + move.promo.toUpperCase();
+      return san;
+    }
+    let sameFile = false, sameRank = false, needDisamb = false;
+    for (let i = 0; i < 64; i++) {
+      if (i === move.from || st.board[i] !== letter) continue;
+      if (!legalMovesFrom(st, i).some((m) => m.to === move.to)) continue;
+      needDisamb = true;
+      if (i % 8 === move.from % 8) sameFile = true;
+      if (Math.floor(i / 8) === Math.floor(move.from / 8)) sameRank = true;
+    }
+    let disamb = "";
+    if (needDisamb) {
+      if (!sameFile) disamb = FILES[move.from % 8];
+      else if (!sameRank) disamb = String(8 - Math.floor(move.from / 8));
+      else disamb = squareName(move.from);
+    }
+    return type.toUpperCase() + disamb + (capture ? "x" : "") + target;
+  }
+
+  function applyAndRecord(st, move) {
+    const san = sanForMove(st, move);
+    const info = applyMoveFull(st, move);
+    if (!Array.isArray(st.history)) st.history = [];
+    st.history.push({
+      from: move.from,
+      to: move.to,
+      promo: move.promo || null,
+      san: san + (info.mate ? "#" : info.check ? "+" : ""),
+    });
+    return info;
+  }
+
+  function describePly(history, ply) {
+    const h = history?.[ply];
+    if (!h) return "that move";
+    return `move ${Math.floor(ply / 2) + 1}${ply % 2 ? "… " : ". "}${h.san}`;
+  }
+
+  function formatClock(ms) {
+    const total = Math.max(0, Math.ceil(ms / 1000));
+    return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+  }
+
   // ---- piece sprites ------------------------------------------------------
   // Pieces are drawn once per letter into an offscreen canvas (100x122 unit
   // box, base line at y=112) and scaled onto the board every frame.
@@ -575,6 +631,12 @@
     let recentRemoteDrops = [];
     let promoPick = null;
     let checkIdx = -1;
+    let clockAnchor = 0;
+    let snapshotAt = 0;
+    let notationScroll = 0;
+    let lastHistLen = 0;
+    let panelDrag = null;
+    let flipped = false;
     const remoteDrags = new Map();
     let state = defaultState();
     const view = { zoom: 1, rot: 0, panX: 0, panY: 0 };
@@ -596,6 +658,10 @@
         fullmove: 1,
         over: false,
         result: null,
+        history: [],
+        clockW: CLOCK_BANK_MS,
+        clockB: CLOCK_BANK_MS,
+        undoReq: null,
         message: "The pond settles into sixty-four squares.",
       };
     }
@@ -610,11 +676,20 @@
       sinks = [];
       remoteSettles = [];
       promoPick = null;
+      clockAnchor = 0;
       refreshCheck();
     }
 
     function makeSnapshot() {
-      return { ...state, board: state.board.slice(), seats: { ...seats() }, castling: { ...state.castling }, full: true };
+      return {
+        ...state,
+        board: state.board.slice(),
+        seats: { ...seats() },
+        castling: { ...state.castling },
+        history: (state.history || []).map((h) => ({ ...h })),
+        undoReq: state.undoReq ? { ...state.undoReq } : null,
+        full: true,
+      };
     }
 
     function applySnapshot(snapshot) {
@@ -636,6 +711,17 @@
       state.fullmove = Number.isInteger(state.fullmove) && state.fullmove >= 1 ? state.fullmove : 1;
       state.over = !!state.over;
       state.result = ["white", "black", "draw"].includes(state.result) ? state.result : null;
+      state.history = Array.isArray(state.history)
+        ? state.history.filter((h) => h && Number.isInteger(h.from) && Number.isInteger(h.to) && typeof h.san === "string")
+            .map((h) => ({ from: h.from, to: h.to, promo: typeof h.promo === "string" ? h.promo : null, san: h.san }))
+        : [];
+      state.clockW = Number.isFinite(state.clockW) ? clamp(state.clockW, 0, CLOCK_BANK_MS) : CLOCK_BANK_MS;
+      state.clockB = Number.isFinite(state.clockB) ? clamp(state.clockB, 0, CLOCK_BANK_MS) : CLOCK_BANK_MS;
+      const ur = state.undoReq;
+      state.undoReq = ur && typeof ur === "object" && typeof ur.by === "string" && Number.isInteger(ur.ply) && ur.ply >= 0
+        ? { by: ur.by, ply: ur.ply, color: ur.color === "b" ? "b" : "w" }
+        : null;
+      snapshotAt = now();
       if (promoPick && (state.over || state.turn !== promoPick.color || state.board[promoPick.from] !== (promoPick.color === "w" ? "P" : "p"))) promoPick = null;
       if (before) spawnMoveAnimations(before, state.board);
       refreshCheck();
@@ -680,6 +766,8 @@
       if (!isHost() || !input || typeof input !== "object") return;
       if (input.type === "reset") resetHostState();
       else if (input.type === "seat") claimSeat(id, input.seat);
+      else if (input.type === "undo-request") handleUndoRequest(id, input.ply | 0);
+      else if (input.type === "undo-response") handleUndoResponse(id, !!input.accept);
       else if (input.type === "move") {
         const from = input.from | 0;
         const to = input.to | 0;
@@ -691,8 +779,10 @@
           return;
         }
         const captured = state.board[to];
-        const info = applyMoveFull(state, move);
+        const info = applyAndRecord(state, move);
         state.message = moveMessage(move, info);
+        state.undoReq = null;
+        clockAnchor = now();
         refreshCheck();
         if (id !== myId) {
           if (info.captured) {
@@ -731,6 +821,108 @@
       if (!moves.length) return null;
       if (moves[0].promo) return moves.find((m) => m.promo === (promo || "q")) || moves[0];
       return moves[0];
+    }
+
+    function handleUndoRequest(id, ply) {
+      const s = seats();
+      const color = s.white === id ? "w" : s.black === id ? "b" : null;
+      const hist = state.history || [];
+      if (!color || state.undoReq || !hist.length || ply < 0 || ply >= hist.length) return;
+      const oppId = color === "w" ? s.black : s.white;
+      if (!oppId) {
+        performUndo(ply, id);
+      } else {
+        state.undoReq = { by: id, ply, color };
+        state.message = `${playerName(id)} asks to take back ${describePly(hist, ply)}.`;
+        state.rev = (state.rev || 0) + 1;
+      }
+    }
+
+    function handleUndoResponse(id, accept) {
+      const req = state.undoReq;
+      if (!req) return;
+      const s = seats();
+      const oppId = req.color === "w" ? s.black : s.white;
+      if (id === req.by) {
+        if (!accept) {
+          state.undoReq = null;
+          state.message = `${playerName(id)} withdraws the take-back request.`;
+          state.rev = (state.rev || 0) + 1;
+        }
+      } else if (id === oppId) {
+        if (accept) performUndo(req.ply, req.by);
+        else {
+          state.undoReq = null;
+          state.message = `${playerName(id)} declines the take-back.`;
+          state.rev = (state.rev || 0) + 1;
+        }
+      }
+    }
+
+    function performUndo(ply, byId) {
+      const oldHist = state.history || [];
+      const target = clamp(ply, 0, oldHist.length);
+      const fresh = defaultState();
+      fresh.rev = (state.rev || 0) + 1;
+      fresh.seats = { ...seats() };
+      fresh.clockW = state.clockW;
+      fresh.clockB = state.clockB;
+      for (const h of oldHist.slice(0, target)) {
+        const moves = legalMovesFrom(fresh, h.from).filter((m) => m.to === h.to);
+        const move = h.promo ? moves.find((m) => m.promo === h.promo) || moves[0] : moves[0];
+        if (!move) break;
+        applyAndRecord(fresh, move);
+      }
+      fresh.message = `${playerName(byId)} takes back ${describePly(oldHist, target)}. The ripples rewind.`;
+      state = fresh;
+      glides = [];
+      sinks = [];
+      remoteSettles = [];
+      promoPick = null;
+      dropAnim = null;
+      clockAnchor = 0;
+      playSound("reset", 0.5);
+      refreshCheck();
+    }
+
+    function clocksRunning() {
+      const s = seats();
+      return !state.over && !!s.white && !!s.black && (state.history?.length || 0) > 0;
+    }
+
+    function tickClocks() {
+      if (!isHost()) return;
+      if (state.undoReq) {
+        const s = seats();
+        const oppId = state.undoReq.color === "w" ? s.black : s.white;
+        if (!oppId) {
+          performUndo(state.undoReq.ply, state.undoReq.by);
+          host.broadcastState(makeSnapshot());
+        }
+      }
+      if (!clocksRunning()) { clockAnchor = 0; return; }
+      const t = now();
+      if (!clockAnchor) { clockAnchor = t; return; }
+      const elapsed = t - clockAnchor;
+      clockAnchor = t;
+      const key = state.turn === "w" ? "clockW" : "clockB";
+      state[key] = Math.max(0, state[key] - elapsed);
+      if (state[key] === 0) {
+        state.over = true;
+        state.result = state.turn === "w" ? "black" : "white";
+        state.message = `${state.turn === "w" ? "White" : "Black"}'s time drains into the pond — ${state.result} wins on time.`;
+        state.rev = (state.rev || 0) + 1;
+        refreshCheck();
+        host.broadcastState(makeSnapshot());
+      }
+    }
+
+    function displayClock(color) {
+      let ms = color === "w" ? state.clockW : state.clockB;
+      if (!isHost() && clocksRunning() && state.turn === color && snapshotAt) {
+        ms -= now() - snapshotAt;
+      }
+      return clamp(ms, 0, CLOCK_BANK_MS);
     }
 
     function refreshCheck() {
@@ -826,8 +1018,9 @@
     }
 
     function applyLocalMove(move) {
-      const info = applyMoveFull(state, move);
+      const info = applyAndRecord(state, move);
       state.message = moveMessage(move, info);
+      state.undoReq = null;
       refreshCheck();
       if (move.castle) {
         const home = info.color === "w" ? 60 : 4;
@@ -938,7 +1131,7 @@
 
     function resetView() {
       view.zoom = 1;
-      view.rot = 0;
+      view.rot = flipped ? Math.PI : 0;
       view.panX = 0;
       view.panY = 0;
     }
@@ -1004,7 +1197,7 @@
     // ---- seat bar (screen space) ------------------------------------------
 
     function seatBarRects() {
-      const bw = Math.min(340, W - 24);
+      const bw = Math.min(390, W - 24);
       const bh = 34;
       const x = (W - bw) / 2;
       const y = 10;
@@ -1032,14 +1225,140 @@
       const s = seats();
       if (pointIn(r.white, x, y)) {
         if (s.white && s.white !== myId) notice(`${playerName(s.white)} holds the white pieces.`);
-        else sendAction({ type: "seat", seat: s.white === myId ? "spectator" : "white" });
+        else {
+          const claiming = s.white !== myId;
+          sendAction({ type: "seat", seat: claiming ? "white" : "spectator" });
+          if (claiming) { flipped = false; fitView(); }
+        }
       } else if (pointIn(r.black, x, y)) {
         if (s.black && s.black !== myId) notice(`${playerName(s.black)} holds the black pieces.`);
-        else sendAction({ type: "seat", seat: s.black === myId ? "spectator" : "black" });
+        else {
+          const claiming = s.black !== myId;
+          sendAction({ type: "seat", seat: claiming ? "black" : "spectator" });
+          if (claiming) { flipped = true; fitView(); }
+        }
       } else if (pointIn(r.watch, x, y)) {
         if (mySeat()) sendAction({ type: "seat", seat: "spectator" });
       }
       return true;
+    }
+
+    // ---- notation panel -----------------------------------------------------
+
+    const NOTE_ROW_H = 18;
+    const NOTE_HEADER_H = 22;
+    const NOTE_PAD = 6;
+
+    function notationRect() {
+      const hist = state.history || [];
+      if (!hist.length) return null;
+      const w = Math.min(126, Math.max(98, W * 0.22));
+      const y = 56;
+      const h = Math.max(90, Math.min(H - y - 112, NOTE_HEADER_H + NOTE_PAD * 2 + Math.ceil(hist.length / 2) * NOTE_ROW_H));
+      return { x: W - w - 10, y, w, h };
+    }
+
+    function notationMaxScroll(r) {
+      const rows = Math.ceil((state.history || []).length / 2);
+      return Math.max(0, rows * NOTE_ROW_H - (r.h - NOTE_HEADER_H - NOTE_PAD * 2));
+    }
+
+    function notationPointerDown(p, pointerId) {
+      const r = notationRect();
+      if (!r || !pointIn(r, p.x, p.y)) return false;
+      panelDrag = { pointerId, startY: p.y, startScroll: notationScroll, moved: false };
+      return true;
+    }
+
+    function notationTapAt(x, y) {
+      const r = notationRect();
+      if (!r || !pointIn(r, x, y)) return;
+      const hist = state.history || [];
+      const localY = y - (r.y + NOTE_HEADER_H + NOTE_PAD) + notationScroll;
+      const row = Math.floor(localY / NOTE_ROW_H);
+      if (row < 0) return;
+      const numW = 24;
+      const colW = (r.w - numW - NOTE_PAD * 2) / 2;
+      const localX = x - (r.x + NOTE_PAD + numW);
+      const ply = row * 2 + (localX >= colW ? 1 : 0);
+      if (localX < 0 || ply >= hist.length) return;
+      requestUndoAt(ply);
+    }
+
+    function requestUndoAt(ply) {
+      if (!mySeat()) { notice("Claim a seat to request a take-back."); return; }
+      if (state.undoReq) { notice("A take-back is already pending."); return; }
+      notice(`Asking to take back ${describePly(state.history, ply)}…`);
+      sendAction({ type: "undo-request", ply });
+    }
+
+    function respondUndo(accept) {
+      sendAction({ type: "undo-response", accept });
+    }
+
+    // ---- undo pill ----------------------------------------------------------
+
+    function undoPillLayout() {
+      const req = state.undoReq;
+      if (!req) return null;
+      const s = seats();
+      const mine = req.by === myId;
+      const approver = (req.color === "w" ? s.black : s.white) === myId;
+      const buttons = mine
+        ? [{ id: "cancel", label: "Cancel" }]
+        : approver
+          ? [{ id: "allow", label: "Allow" }, { id: "decline", label: "Decline" }]
+          : [];
+      const bw = Math.min(430, W - 20);
+      const bh = 30;
+      const x = (W - bw) / 2;
+      const y = 52;
+      const btnW = 58, btnH = 22, gap = 6;
+      let bx = x + bw - NOTE_PAD;
+      const rects = [];
+      for (let i = buttons.length - 1; i >= 0; i--) {
+        bx -= btnW;
+        rects.unshift({ ...buttons[i], x: bx, y: y + (bh - btnH) / 2, w: btnW, h: btnH });
+        bx -= gap;
+      }
+      return { bar: { x, y, w: bw, h: bh }, buttons: rects, req, mine, approver };
+    }
+
+    function undoTapAt(x, y) {
+      const l = undoPillLayout();
+      if (!l || !pointIn(l.bar, x, y)) return false;
+      for (const b of l.buttons) {
+        if (pointIn(b, x, y)) {
+          respondUndo(b.id === "allow");
+          return true;
+        }
+      }
+      return true;
+    }
+
+    // ---- fit / flip controls ------------------------------------------------
+
+    function controlRects() {
+      const h = 26, w = 52, gap = 8;
+      const y = H - h - 12;
+      return {
+        fit: { x: 12, y, w, h },
+        flip: { x: 12 + w + gap, y, w, h },
+      };
+    }
+
+    function fitView() { resetView(); }
+
+    function flipBoard() {
+      flipped = !flipped;
+      view.rot = flipped ? Math.PI : 0;
+    }
+
+    function controlTapAt(x, y) {
+      const r = controlRects();
+      if (pointIn(r.fit, x, y)) { fitView(); return true; }
+      if (pointIn(r.flip, x, y)) { flipBoard(); return true; }
+      return false;
     }
 
     function onPointerDown(e) {
@@ -1048,7 +1367,15 @@
       const pointerId = e.pointerId ?? "mouse";
       e.preventDefault();
       if (promoPick) { promoTapAt(p.x, p.y); return; }
-      if (!activePointers.size && seatTapAt(p.x, p.y)) return;
+      if (!activePointers.size) {
+        if (undoTapAt(p.x, p.y)) return;
+        if (seatTapAt(p.x, p.y)) return;
+        if (controlTapAt(p.x, p.y)) return;
+        if (notationPointerDown(p, pointerId)) {
+          if (e.pointerId !== undefined) canvas.setPointerCapture?.(e.pointerId);
+          return;
+        }
+      }
       const b = screenToBoard(p.x, p.y);
       const idx = squareIndexAt(b.x, b.y);
       const letter = idx >= 0 ? state.board[idx] : "";
@@ -1098,6 +1425,15 @@
 
     function onPointerMove(e) {
       const pointerId = e.pointerId ?? "mouse";
+      if (panelDrag && pointerId === panelDrag.pointerId) {
+        e.preventDefault();
+        const p = pointerPoint(e);
+        const dy = p.y - panelDrag.startY;
+        if (Math.abs(dy) > 4) panelDrag.moved = true;
+        const r = notationRect();
+        if (r) notationScroll = clamp(panelDrag.startScroll - dy, 0, notationMaxScroll(r));
+        return;
+      }
       if (drag && pointerId === drag.pointerId) {
         e.preventDefault();
         const p = pointerPoint(e);
@@ -1115,6 +1451,14 @@
 
     function onPointerUp(e) {
       const pointerId = e.pointerId ?? "mouse";
+      if (panelDrag && pointerId === panelDrag.pointerId) {
+        e.preventDefault();
+        const p = pointerPoint(e);
+        if (!panelDrag.moved) notationTapAt(p.x, p.y);
+        panelDrag = null;
+        if (e.pointerId !== undefined && canvas.hasPointerCapture?.(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+        return;
+      }
       if (drag && pointerId === drag.pointerId) {
         e.preventDefault();
         finishDrag(true);
@@ -1129,6 +1473,7 @@
 
     function onLostPointerCapture(e) {
       const pointerId = e.pointerId ?? "mouse";
+      if (panelDrag && pointerId === panelDrag.pointerId) { panelDrag = null; return; }
       if (drag && pointerId === drag.pointerId) { finishDrag(false); return; }
       activePointers.delete(pointerId);
       if (!activePointers.size) boardGesture = null;
@@ -1203,6 +1548,11 @@
     function onWheel(e) {
       e.preventDefault();
       const p = eventPoint(e);
+      const nr = notationRect();
+      if (nr && pointIn(nr, p.x, p.y)) {
+        notationScroll = clamp(notationScroll + e.deltaY * 0.5, 0, notationMaxScroll(nr));
+        return;
+      }
       const oldZoom = view.zoom;
       const nextZoom = clamp(view.zoom * Math.exp(-e.deltaY * 0.0014), MIN_ZOOM, MAX_ZOOM);
       const k = nextZoom / oldZoom;
@@ -1216,7 +1566,8 @@
       if (target?.closest?.("input, textarea, select, [contenteditable='true']")) return;
       if (e.key === "q" || e.key === "Q") { e.preventDefault(); view.rot -= Math.PI / 12; }
       else if (e.key === "e" || e.key === "E") { e.preventDefault(); view.rot += Math.PI / 12; }
-      else if (e.key === "0") { e.preventDefault(); resetView(); }
+      else if (e.key === "f" || e.key === "F") { e.preventDefault(); flipBoard(); }
+      else if (e.key === "0") { e.preventDefault(); fitView(); }
       else if (e.key === "Escape" && drag) { e.preventDefault(); finishDrag(false); }
       else if (e.key === "Escape" && promoPick) { e.preventDefault(); promoPick = null; }
     }
@@ -1616,7 +1967,7 @@
       if (!id) return fallback;
       if (id === myId) return "You";
       const name = playerName(id);
-      return name.length > 9 ? name.slice(0, 8) + "…" : name;
+      return name.length > 8 ? name.slice(0, 7) + "…" : name;
     }
 
     function drawSeatSegment(r, active, mine, label, sub, dotColor) {
@@ -1653,9 +2004,131 @@
       drawSeatSegment(r.white, !!s.white, s.white === myId, "White", seatLabel(s.white, "Open seat"), "#f2ecd8");
       drawSeatSegment(r.black, !!s.black, s.black === myId, "Black", seatLabel(s.black, "Open seat"), "#26333e");
       drawSeatSegment(r.watch, false, !mySeat(), "Watch", mySeat() ? "Tap to release" : "Spectating", null);
+      drawSeatClock(r.white, "w");
+      drawSeatClock(r.black, "b");
       ctx.strokeStyle = "rgba(120, 160, 180, 0.25)";
       ctx.lineWidth = 1;
       ctx.strokeRect(r.bar.x, r.bar.y, r.bar.w, r.bar.h);
+      ctx.restore();
+    }
+
+    function drawSeatClock(r, color) {
+      const ms = displayClock(color);
+      const running = clocksRunning() && state.turn === color;
+      const low = ms < 60_000;
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      ctx.font = running ? "700 12px ui-monospace, monospace" : "600 11px ui-monospace, monospace";
+      ctx.fillStyle = low && running ? "#ff9d88" : running ? "#c9f5de" : "rgba(199, 222, 234, 0.55)";
+      ctx.fillText(formatClock(ms), r.x + r.w - 8, r.y + r.h / 2);
+    }
+
+    function drawNotation() {
+      const r = notationRect();
+      if (!r) return;
+      const hist = state.history || [];
+      if (hist.length !== lastHistLen) {
+        lastHistLen = hist.length;
+        notationScroll = notationMaxScroll(r);
+      }
+      ctx.save();
+      ctx.fillStyle = "rgba(9, 22, 30, 0.62)";
+      drawRoundRect(r.x, r.y, r.w, r.h, 10);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(120, 160, 180, 0.25)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.textBaseline = "middle";
+      ctx.textAlign = "left";
+      ctx.fillStyle = "rgba(199, 222, 234, 0.85)";
+      ctx.font = "700 10px system-ui, sans-serif";
+      ctx.fillText("MOVES · tap to rewind", r.x + NOTE_PAD + 2, r.y + NOTE_HEADER_H / 2 + 2);
+      ctx.beginPath();
+      ctx.rect(r.x, r.y + NOTE_HEADER_H, r.w, r.h - NOTE_HEADER_H);
+      ctx.clip();
+      const numW = 24;
+      const colW = (r.w - numW - NOTE_PAD * 2) / 2;
+      const top = r.y + NOTE_HEADER_H + NOTE_PAD - notationScroll;
+      const rows = Math.ceil(hist.length / 2);
+      const pendingPly = state.undoReq?.ply ?? -1;
+      for (let row = 0; row < rows; row++) {
+        const y = top + row * NOTE_ROW_H + NOTE_ROW_H / 2;
+        if (y < r.y + NOTE_HEADER_H - NOTE_ROW_H || y > r.y + r.h + NOTE_ROW_H) continue;
+        ctx.fillStyle = "rgba(150, 180, 196, 0.5)";
+        ctx.font = "600 11px ui-monospace, monospace";
+        ctx.fillText(`${row + 1}.`, r.x + NOTE_PAD, y);
+        for (const half of [0, 1]) {
+          const ply = row * 2 + half;
+          if (ply >= hist.length) continue;
+          const x = r.x + NOTE_PAD + numW + half * colW;
+          if (ply === pendingPly) {
+            ctx.fillStyle = "rgba(255, 197, 138, 0.22)";
+            ctx.fillRect(x - 3, y - NOTE_ROW_H / 2 + 1, colW, NOTE_ROW_H - 2);
+          }
+          ctx.fillStyle = ply === hist.length - 1 ? "#c9f5de" : "#eaf6ff";
+          ctx.font = ply === hist.length - 1 ? "700 11.5px ui-monospace, monospace" : "600 11.5px ui-monospace, monospace";
+          ctx.fillText(hist[ply].san, x, y);
+        }
+      }
+      ctx.restore();
+    }
+
+    function drawUndoPill() {
+      const l = undoPillLayout();
+      if (!l) return;
+      const { bar, buttons, req } = l;
+      ctx.save();
+      ctx.fillStyle = "rgba(40, 34, 18, 0.85)";
+      drawRoundRect(bar.x, bar.y, bar.w, bar.h, 15);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255, 197, 138, 0.45)";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#ffd9a8";
+      ctx.font = "700 11.5px system-ui, sans-serif";
+      const label = l.mine
+        ? `Take-back requested (${describePly(state.history, req.ply)})…`
+        : `${seatLabel(req.by, "A player")} asks to take back ${describePly(state.history, req.ply)}`;
+      const maxLabelW = bar.w - NOTE_PAD * 2 - buttons.length * 64 - 8;
+      let text = label;
+      while (ctx.measureText(text).width > maxLabelW && text.length > 8) text = text.slice(0, -2);
+      if (text !== label) text += "…";
+      ctx.fillText(text, bar.x + 12, bar.y + bar.h / 2);
+      for (const b of buttons) {
+        const allow = b.id === "allow";
+        ctx.fillStyle = allow ? "rgba(140, 232, 188, 0.2)" : "rgba(232, 140, 122, 0.16)";
+        drawRoundRect(b.x, b.y, b.w, b.h, 11);
+        ctx.fill();
+        ctx.strokeStyle = allow ? "rgba(140, 232, 188, 0.55)" : "rgba(232, 160, 140, 0.45)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.textAlign = "center";
+        ctx.fillStyle = allow ? "#c9f5de" : "#ffcfc2";
+        ctx.font = "700 11px system-ui, sans-serif";
+        ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 0.5);
+      }
+      ctx.restore();
+    }
+
+    function drawControls() {
+      const r = controlRects();
+      ctx.save();
+      for (const [key, label] of [["fit", "Fit"], ["flip", "Flip"]]) {
+        const b = r[key];
+        ctx.fillStyle = "rgba(9, 22, 30, 0.6)";
+        drawRoundRect(b.x, b.y, b.w, b.h, 13);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(120, 160, 180, 0.3)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = key === "flip" && flipped ? "#c9f5de" : "#dcecf5";
+        ctx.font = "700 11px system-ui, sans-serif";
+        ctx.fillText(label, b.x + b.w / 2, b.y + b.h / 2 + 0.5);
+      }
       ctx.restore();
     }
 
@@ -1668,16 +2141,14 @@
       ctx.fillText(showNotice ? localNotice.text : (state.message || ""), W / 2, H - 64);
       ctx.fillStyle = "rgba(199, 222, 234, 0.62)";
       ctx.font = "600 12px system-ui, sans-serif";
-      const hint = mySeat()
-        ? "Drag your pieces to move · drag the water to pan · pinch or scroll to zoom"
-        : "Claim a seat above to play · drag the water to pan · pinch or scroll to zoom";
-      ctx.fillText(hint, W / 2, H - 42);
+      ctx.fillText(mySeat() ? "Drag your pieces to move" : "Claim a seat above to play", W / 2, H - 42);
     }
 
     function loop(ts) {
       rafId = requestAnimationFrame(loop);
       if (!W || !H) resize();
       if (drag && ts - lastDragSentAt > 1200) sendDragEvent(true);
+      tickClocks();
       drawBackground();
       spawnAmbientRipples();
       withCamera(() => {
@@ -1696,6 +2167,9 @@
       });
       drawVignette();
       drawSeatBar();
+      drawNotation();
+      drawUndoPill();
+      drawControls();
       drawPromoPicker();
       drawBanner(ts);
       if (isHost() && ts - lastHeartbeatAt > SNAPSHOT_HEARTBEAT_MS) {
@@ -1767,6 +2241,10 @@
             s[seat] = null;
             changed = true;
           }
+        }
+        if (state.undoReq && !ids.has(state.undoReq.by)) {
+          state.undoReq = null;
+          changed = true;
         }
         for (const id of [...remoteDrags.keys()]) if (!ids.has(id)) remoteDrags.delete(id);
         if (changed) state.rev = (state.rev || 0) + 1;
