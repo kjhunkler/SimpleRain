@@ -634,6 +634,7 @@
     let clockAnchor = 0;
     let snapshotAt = 0;
     let notationScroll = 0;
+    let notationCollapsed = false;
     let lastHistLen = 0;
     let panelDrag = null;
     let flipped = false;
@@ -1252,6 +1253,10 @@
     function notationRect() {
       const hist = state.history || [];
       if (!hist.length) return null;
+      if (notationCollapsed) {
+        const w = 86;
+        return { x: W - w - 10, y: 56, w, h: NOTE_HEADER_H + 4, collapsed: true };
+      }
       const w = Math.min(126, Math.max(98, W * 0.22));
       const y = 56;
       const h = Math.max(90, Math.min(H - y - 112, NOTE_HEADER_H + NOTE_PAD * 2 + Math.ceil(hist.length / 2) * NOTE_ROW_H));
@@ -1261,6 +1266,14 @@
     function notationMaxScroll(r) {
       const rows = Math.ceil((state.history || []).length / 2);
       return Math.max(0, rows * NOTE_ROW_H - (r.h - NOTE_HEADER_H - NOTE_PAD * 2));
+    }
+
+    function toggleNotation() {
+      notationCollapsed = !notationCollapsed;
+      if (!notationCollapsed) {
+        const r = notationRect();
+        if (r) notationScroll = notationMaxScroll(r);
+      }
     }
 
     function notationPointerDown(p, pointerId) {
@@ -1273,6 +1286,7 @@
     function notationTapAt(x, y) {
       const r = notationRect();
       if (!r || !pointIn(r, x, y)) return;
+      if (r.collapsed || y <= r.y + NOTE_HEADER_H) { toggleNotation(); return; }
       const hist = state.history || [];
       const localY = y - (r.y + NOTE_HEADER_H + NOTE_PAD) + notationScroll;
       const row = Math.floor(localY / NOTE_ROW_H);
@@ -1431,7 +1445,7 @@
         const dy = p.y - panelDrag.startY;
         if (Math.abs(dy) > 4) panelDrag.moved = true;
         const r = notationRect();
-        if (r) notationScroll = clamp(panelDrag.startScroll - dy, 0, notationMaxScroll(r));
+        if (r && !r.collapsed) notationScroll = clamp(panelDrag.startScroll - dy, 0, notationMaxScroll(r));
         return;
       }
       if (drag && pointerId === drag.pointerId) {
@@ -1549,7 +1563,7 @@
       e.preventDefault();
       const p = eventPoint(e);
       const nr = notationRect();
-      if (nr && pointIn(nr, p.x, p.y)) {
+      if (nr && !nr.collapsed && pointIn(nr, p.x, p.y)) {
         notationScroll = clamp(notationScroll + e.deltaY * 0.5, 0, notationMaxScroll(nr));
         return;
       }
@@ -2027,10 +2041,6 @@
       const r = notationRect();
       if (!r) return;
       const hist = state.history || [];
-      if (hist.length !== lastHistLen) {
-        lastHistLen = hist.length;
-        notationScroll = notationMaxScroll(r);
-      }
       ctx.save();
       ctx.fillStyle = "rgba(9, 22, 30, 0.62)";
       drawRoundRect(r.x, r.y, r.w, r.h, 10);
@@ -2042,7 +2052,21 @@
       ctx.textAlign = "left";
       ctx.fillStyle = "rgba(199, 222, 234, 0.85)";
       ctx.font = "700 10px system-ui, sans-serif";
-      ctx.fillText("MOVES · tap to rewind", r.x + NOTE_PAD + 2, r.y + NOTE_HEADER_H / 2 + 2);
+      const headerY = r.y + (r.collapsed ? r.h : NOTE_HEADER_H) / 2 + 1;
+      ctx.fillText(r.collapsed ? `MOVES · ${hist.length}` : "MOVES", r.x + NOTE_PAD + 2, headerY);
+      ctx.textAlign = "right";
+      ctx.fillText(r.collapsed ? "◂" : "▸", r.x + r.w - NOTE_PAD - 2, headerY);
+      if (r.collapsed) {
+        lastHistLen = hist.length;
+        ctx.restore();
+        return;
+      }
+      if (hist.length !== lastHistLen) {
+        lastHistLen = hist.length;
+        notationScroll = notationMaxScroll(r);
+      }
+      notationScroll = clamp(notationScroll, 0, notationMaxScroll(r));
+      ctx.textAlign = "left";
       ctx.beginPath();
       ctx.rect(r.x, r.y + NOTE_HEADER_H, r.w, r.h - NOTE_HEADER_H);
       ctx.clip();
@@ -2181,6 +2205,7 @@
     return {
       start() {
         resize();
+        notationCollapsed = W > 0 && W < 640;
         if (initialState) applySnapshot(initialState);
         else if (isHost()) resetHostState();
         window.addEventListener("resize", resize);
