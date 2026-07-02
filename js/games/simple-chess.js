@@ -28,6 +28,12 @@
     const x = Math.sin(seed * 127.1 + i * 311.7) * 43758.5453;
     return x - Math.floor(x);
   }
+  function colorWithAlpha(hex, a) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
+    if (!m) return `rgba(140, 232, 188, ${a})`;
+    const n = parseInt(m[1], 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+  }
 
   function startingBoard() {
     const board = new Array(64).fill("");
@@ -303,6 +309,7 @@
     const canvas = host.canvas;
     const ctx = canvas.getContext("2d");
     const isHost = () => !!host.isHost?.();
+    const myId = host.myId;
 
     let rafId = 0;
     let W = 0;
@@ -316,6 +323,11 @@
     let glides = [];
     let sinks = [];
     let audioCtx = null;
+    let localNotice = null;
+    let lastDragSentAt = 0;
+    let remoteSettles = [];
+    let recentRemoteDrops = [];
+    const remoteDrags = new Map();
     let state = defaultState();
     const view = { zoom: 1, rot: 0, panX: 0, panY: 0 };
     const activePointers = new Map();
@@ -328,6 +340,7 @@
         rev: 0,
         createdAt: Date.now(),
         board: startingBoard(),
+        seats: { white: null, black: null },
         message: "The pond settles into sixty-four squares.",
       };
     }
@@ -348,6 +361,11 @@
       state = { ...defaultState(), ...snapshot };
       if (!Array.isArray(state.board) || state.board.length !== 64) state.board = startingBoard();
       state.board = state.board.map((cell) => (typeof cell === "string" && /^[prnbqk]$/i.test(cell) ? cell : ""));
+      const rawSeats = state.seats && typeof state.seats === "object" ? state.seats : {};
+      state.seats = {
+        white: typeof rawSeats.white === "string" ? rawSeats.white : null,
+        black: typeof rawSeats.black === "string" ? rawSeats.black : null,
+      };
       if (before) spawnMoveAnimations(before, state.board);
     }
 
@@ -362,36 +380,110 @@
       }
       if (!appeared.length) return;
       if (appeared.length > 6) { glides = []; sinks = []; return; }
-      let moved = false;
+      let sound = null;
       for (const to of appeared) {
         const letter = after[to];
         const fromPos = vacated.findIndex((idx) => before[idx] === letter);
         if (fromPos < 0) continue;
         const from = vacated.splice(fromPos, 1)[0];
-        glides.push({ letter, from, to, start: now(), dur: 200 });
-        if (before[to]) sinks.push({ letter: before[to], idx: to, start: now(), dur: 260 });
-        moved = true;
+        const captured = before[to];
+        if (captured) sinks.push({ letter: captured, idx: to, start: now(), dur: 260 });
+        if (!consumeRemoteDrop(from, to)) glides.push({ letter, from, to, start: now(), dur: 200 });
+        sound = captured ? "capture" : (sound || "place");
         if (glides.length >= 6) break;
       }
-      if (moved) playSound(sinks.length ? "capture" : "place", 0.55);
+      if (sound) playSound(sound, 0.55);
     }
 
     function handleAction(id, input) {
       if (!isHost() || !input || typeof input !== "object") return;
       if (input.type === "reset") resetHostState();
+      else if (input.type === "seat") claimSeat(id, input.seat);
       else if (input.type === "move") {
         const from = input.from | 0;
         const to = input.to | 0;
         const letter = state.board[from];
+        if (!letter || !canMovePiece(id, letter)) {
+          host.broadcastState(makeSnapshot());
+          return;
+        }
         const captured = state.board[to];
         applyMove(from, to);
-        if (id !== host.myId && letter && state.board[to] === letter) {
-          glides.push({ letter, from, to, start: now(), dur: 200 });
+        if (id !== myId && state.board[to] === letter) {
           if (captured) sinks.push({ letter: captured, idx: to, start: now(), dur: 260 });
+          if (!consumeRemoteDrop(from, to)) glides.push({ letter, from, to, start: now(), dur: 200 });
           playSound(captured ? "capture" : "place", 0.55);
         }
       }
       host.broadcastState(makeSnapshot());
+    }
+
+    function seats() {
+      if (!state.seats || typeof state.seats !== "object") state.seats = { white: null, black: null };
+      return state.seats;
+    }
+
+    function playerName(id) {
+      const p = (host.getPlayers?.() || []).find((pl) => pl.id === id) || host.getProfile?.(id);
+      return p?.name || "A player";
+    }
+
+    function canMovePiece(id, letter) {
+      const seat = isWhitePiece(letter) ? seats().white : seats().black;
+      return !seat || seat === id;
+    }
+
+    function claimSeat(id, seat) {
+      const s = seats();
+      if (seat === "white" || seat === "black") {
+        if (s[seat] && s[seat] !== id) return;
+        if (s.white === id) s.white = null;
+        if (s.black === id) s.black = null;
+        s[seat] = id;
+        state.message = `${playerName(id)} takes the ${seat} pieces.`;
+      } else {
+        if (s.white !== id && s.black !== id) return;
+        if (s.white === id) s.white = null;
+        if (s.black === id) s.black = null;
+        state.message = `${playerName(id)} settles back to watch.`;
+      }
+      state.rev = (state.rev || 0) + 1;
+    }
+
+    function notice(text) {
+      localNotice = { text, until: now() + 2000 };
+    }
+
+    function sendAction(input) {
+      if (isHost()) handleAction(myId, input);
+      else host.sendInput(input);
+    }
+
+    function consumeRemoteDrop(from, to) {
+      const t = now();
+      recentRemoteDrops = recentRemoteDrops.filter((d) => t - d.at < 1000);
+      const i = recentRemoteDrops.findIndex((d) => d.from === from && d.to === to);
+      if (i < 0) return false;
+      recentRemoteDrops.splice(i, 1);
+      return true;
+    }
+
+    function handlePeerEvent(id, event) {
+      if (!event || typeof event !== "object" || id === myId) return;
+      if (event.kind === "drag") {
+        const letter = typeof event.letter === "string" && /^[prnbqk]$/i.test(event.letter) ? event.letter : "";
+        const from = event.from | 0;
+        if (!letter || from < 0 || from > 63) return;
+        remoteDrags.set(id, { letter, from, bx: +event.bx || 0, by: +event.by || 0, at: now() });
+      } else if (event.kind === "drop") {
+        const d = remoteDrags.get(id);
+        remoteDrags.delete(id);
+        if (!d) return;
+        const to = event.to | 0;
+        if (to < 0 || to > 63) return;
+        remoteSettles.push({ letter: d.letter, from: d.from, to, x0: d.bx, y0: d.by - 0.3, start: now(), dur: 150 });
+        recentRemoteDrops.push({ from: d.from, to, at: now() });
+      }
     }
 
     function applyMove(from, to) {
@@ -410,7 +502,7 @@
 
     function sendMove(from, to) {
       if (isHost()) {
-        handleAction(host.myId, { type: "move", from, to });
+        handleAction(myId, { type: "move", from, to });
       } else {
         applyMove(from, to);
         host.sendInput({ type: "move", from, to });
@@ -568,22 +660,71 @@
       if (ripples.length > MAX_RIPPLES) ripples.shift();
     }
 
+    // ---- seat bar (screen space) ------------------------------------------
+
+    function seatBarRects() {
+      const bw = Math.min(340, W - 24);
+      const bh = 34;
+      const x = (W - bw) / 2;
+      const y = 10;
+      const third = bw / 3;
+      return {
+        bar: { x, y, w: bw, h: bh },
+        white: { x, y, w: third, h: bh },
+        black: { x: x + third, y, w: third, h: bh },
+        watch: { x: x + third * 2, y, w: third, h: bh },
+      };
+    }
+
+    function pointIn(r, x, y) { return r && x >= r.x && y >= r.y && x <= r.x + r.w && y <= r.y + r.h; }
+
+    function mySeat() {
+      const s = seats();
+      if (s.white === myId) return "white";
+      if (s.black === myId) return "black";
+      return null;
+    }
+
+    function seatTapAt(x, y) {
+      const r = seatBarRects();
+      if (!pointIn(r.bar, x, y)) return false;
+      const s = seats();
+      if (pointIn(r.white, x, y)) {
+        if (s.white && s.white !== myId) notice(`${playerName(s.white)} holds the white pieces.`);
+        else sendAction({ type: "seat", seat: s.white === myId ? "spectator" : "white" });
+      } else if (pointIn(r.black, x, y)) {
+        if (s.black && s.black !== myId) notice(`${playerName(s.black)} holds the black pieces.`);
+        else sendAction({ type: "seat", seat: s.black === myId ? "spectator" : "black" });
+      } else if (pointIn(r.watch, x, y)) {
+        if (mySeat()) sendAction({ type: "seat", seat: "spectator" });
+      }
+      return true;
+    }
+
     function onPointerDown(e) {
       if (drag) { e.preventDefault(); return; }
       const p = pointerPoint(e);
       const pointerId = e.pointerId ?? "mouse";
       e.preventDefault();
+      if (!activePointers.size && seatTapAt(p.x, p.y)) return;
       const b = screenToBoard(p.x, p.y);
       const idx = squareIndexAt(b.x, b.y);
       const letter = idx >= 0 ? state.board[idx] : "";
       if (letter && !activePointers.size && !dropAnim) {
-        if (e.pointerId !== undefined) canvas.setPointerCapture?.(e.pointerId);
-        const touch = (e.pointerType || (e.touches ? "touch" : "mouse")) === "touch";
-        drag = { pointerId, letter, from: idx, bx: b.x, by: b.y, start: now(), lift: touch ? 0.52 : 0.14 };
-        addRipple(b.x, b.y);
-        playSound("pickup");
-        lastTapAt = 0;
-        return;
+        if (!canMovePiece(myId, letter)) {
+          const owner = isWhitePiece(letter) ? seats().white : seats().black;
+          notice(`${playerName(owner)} holds the ${isWhitePiece(letter) ? "white" : "black"} pieces.`);
+          addRipple(b.x, b.y);
+        } else {
+          if (e.pointerId !== undefined) canvas.setPointerCapture?.(e.pointerId);
+          const touch = (e.pointerType || (e.touches ? "touch" : "mouse")) === "touch";
+          drag = { pointerId, letter, from: idx, bx: b.x, by: b.y, start: now(), lift: touch ? 0.52 : 0.14 };
+          addRipple(b.x, b.y);
+          playSound("pickup");
+          sendDragEvent(true);
+          lastTapAt = 0;
+          return;
+        }
       }
       activePointers.set(pointerId, { x: p.x, y: p.y });
       if (e.pointerId !== undefined) canvas.setPointerCapture?.(e.pointerId);
@@ -598,6 +739,20 @@
       startBoardGesture();
     }
 
+    function sendDragEvent(force = false) {
+      if (!drag || !host.sendEvent) return;
+      const t = now();
+      if (!force && t - lastDragSentAt < 66) return;
+      lastDragSentAt = t;
+      host.sendEvent({
+        kind: "drag",
+        letter: drag.letter,
+        from: drag.from,
+        bx: Math.round(drag.bx * 100) / 100,
+        by: Math.round((drag.by - dragLift(t)) * 100) / 100,
+      });
+    }
+
     function onPointerMove(e) {
       const pointerId = e.pointerId ?? "mouse";
       if (drag && pointerId === drag.pointerId) {
@@ -606,6 +761,7 @@
         const b = screenToBoard(p.x, p.y);
         drag.bx = b.x;
         drag.by = b.y;
+        sendDragEvent();
         return;
       }
       if (!activePointers.has(pointerId)) return;
@@ -652,6 +808,7 @@
       const to = canMove ? target : held.from;
       const captured = canMove ? state.board[to] : "";
       dropAnim = { letter: held.letter, to, x0: dropX, y0: dropY, start: now(), dur: 150, captured: !!captured };
+      host.sendEvent?.({ kind: "drop", to });
       if (canMove) {
         if (captured) sinks.push({ letter: captured, idx: to, start: now(), dur: 260 });
         sendMove(held.from, to);
@@ -914,6 +1071,11 @@
       if (drag) skip.add(drag.from);
       if (dropAnim) skip.add(dropAnim.to);
       for (const g of glides) skip.add(g.to);
+      for (const r of remoteSettles) {
+        skip.add(r.to);
+        if (state.board[r.from] === r.letter) skip.add(r.from);
+      }
+      for (const d of remoteDrags.values()) skip.add(d.from);
       for (let idx = 0; idx < 64; idx++) {
         const letter = state.board[idx];
         if (!letter || skip.has(idx)) continue;
@@ -921,6 +1083,52 @@
         drawPieceShadow(c.x, c.y, s, 1, 0);
         drawPieceSprite(letter, c.x, c.y);
       }
+    }
+
+    function drawRemoteDrags(ts) {
+      const s = cellPx();
+      for (const [id, d] of remoteDrags) {
+        if (ts - d.at > 4000) { remoteDrags.delete(id); continue; }
+        const color = host.getProfile?.(id)?.color || "#8ce8bc";
+        drawSquareGlow(d.from, colorWithAlpha(color, 0.5), Math.max(1.6, s * 0.045));
+        const hoverIdx = squareIndexAt(d.bx, d.by);
+        if (hoverIdx >= 0 && hoverIdx !== d.from) {
+          const pulse = 0.5 + Math.sin(ts * 0.012) * 0.16;
+          drawSquareGlow(hoverIdx, colorWithAlpha(color, pulse), Math.max(2, s * 0.06));
+        }
+        drawPieceShadow(d.bx, d.by + 0.3, s, 1.1, 0.5);
+        drawPieceSprite(d.letter, d.bx, d.by, 1.12, 0.88);
+      }
+    }
+
+    function drawRemoteSettles(ts) {
+      const s = cellPx();
+      const keep = [];
+      for (const r of remoteSettles) {
+        const t = (ts - r.start) / r.dur;
+        const to = squareCenter(r.to);
+        if (t >= 1) {
+          if (!r.settled) {
+            r.settled = true;
+            addRipple(to.x, to.y, true);
+          }
+          const applied = state.board[r.to] === r.letter && state.board[r.from] !== r.letter;
+          if (!applied && ts - r.start < 1500) {
+            keep.push(r);
+            drawPieceShadow(to.x, to.y, s, 1, 0);
+            drawPieceSprite(r.letter, to.x, to.y);
+          }
+          continue;
+        }
+        keep.push(r);
+        const ease = easeOutCubic(t);
+        const bx = r.x0 + (to.x - r.x0) * ease;
+        const by = r.y0 + (to.y - r.y0) * ease;
+        const scale = 1.12 - ease * 0.12;
+        drawPieceShadow(bx, by, s, scale, 1 - ease);
+        drawPieceSprite(r.letter, bx, by, scale);
+      }
+      remoteSettles = keep;
     }
 
     function drawGlides(ts) {
@@ -978,20 +1186,72 @@
       drawPieceSprite(drag.letter, drag.bx + wob, drag.by - lift, 1.14);
     }
 
-    function drawBanner() {
-      ctx.textAlign = "center";
+    function seatLabel(id, fallback) {
+      if (!id) return fallback;
+      if (id === myId) return "You";
+      const name = playerName(id);
+      return name.length > 9 ? name.slice(0, 8) + "…" : name;
+    }
+
+    function drawSeatSegment(r, active, mine, label, sub, dotColor) {
+      ctx.fillStyle = mine ? "rgba(140, 232, 188, 0.16)" : active ? "rgba(19, 42, 54, 0.72)" : "rgba(13, 30, 40, 0.62)";
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      if (dotColor) {
+        ctx.beginPath();
+        ctx.arc(r.x + 13, r.y + r.h / 2, 4.4, 0, Math.PI * 2);
+        ctx.fillStyle = dotColor;
+        ctx.fill();
+        ctx.strokeStyle = "rgba(10, 22, 30, 0.7)";
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+      }
+      ctx.textAlign = "left";
       ctx.textBaseline = "middle";
       ctx.fillStyle = "#eaf6ff";
+      ctx.font = "700 11px system-ui, sans-serif";
+      ctx.fillText(label, r.x + (dotColor ? 23 : 12), r.y + r.h / 2 - (sub ? 6 : 0));
+      if (sub) {
+        ctx.fillStyle = "rgba(199, 222, 234, 0.72)";
+        ctx.font = "600 10px system-ui, sans-serif";
+        ctx.fillText(sub, r.x + (dotColor ? 23 : 12), r.y + r.h / 2 + 7);
+      }
+    }
+
+    function drawSeatBar() {
+      const r = seatBarRects();
+      const s = seats();
+      ctx.save();
+      ctx.fillStyle = "rgba(9, 22, 30, 0.55)";
+      ctx.beginPath();
+      ctx.roundRect ? (ctx.roundRect(r.bar.x - 4, r.bar.y - 4, r.bar.w + 8, r.bar.h + 8, 12), ctx.fill()) : ctx.fillRect(r.bar.x - 4, r.bar.y - 4, r.bar.w + 8, r.bar.h + 8);
+      drawSeatSegment(r.white, !!s.white, s.white === myId, "White", seatLabel(s.white, "Open seat"), "#f2ecd8");
+      drawSeatSegment(r.black, !!s.black, s.black === myId, "Black", seatLabel(s.black, "Open seat"), "#26333e");
+      drawSeatSegment(r.watch, false, !mySeat(), "Watch", mySeat() ? "Tap to release" : "Spectating", null);
+      ctx.strokeStyle = "rgba(120, 160, 180, 0.25)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(r.bar.x, r.bar.y, r.bar.w, r.bar.h);
+      ctx.restore();
+    }
+
+    function drawBanner(ts) {
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const showNotice = localNotice && ts < localNotice.until && localNotice.text;
+      ctx.fillStyle = showNotice ? "#ffd9a8" : "#eaf6ff";
       ctx.font = "700 16px system-ui, sans-serif";
-      ctx.fillText(state.message || "", W / 2, H - 64);
+      ctx.fillText(showNotice ? localNotice.text : (state.message || ""), W / 2, H - 64);
       ctx.fillStyle = "rgba(199, 222, 234, 0.62)";
       ctx.font = "600 12px system-ui, sans-serif";
-      ctx.fillText("Drag a piece to move it · drag the water to pan · pinch or scroll to zoom", W / 2, H - 42);
+      const hint = mySeat()
+        ? "Drag your pieces to move · drag the water to pan · pinch or scroll to zoom"
+        : "Claim a seat above to play · drag the water to pan · pinch or scroll to zoom";
+      ctx.fillText(hint, W / 2, H - 42);
     }
 
     function loop(ts) {
       rafId = requestAnimationFrame(loop);
       if (!W || !H) resize();
+      if (drag && ts - lastDragSentAt > 1200) sendDragEvent(true);
       drawBackground();
       spawnAmbientRipples();
       withCamera(() => {
@@ -1003,11 +1263,14 @@
         drawSinks(ts);
         drawPieces(ts);
         drawGlides(ts);
+        drawRemoteSettles(ts);
+        drawRemoteDrags(ts);
         drawDropAnim(ts);
         drawDragPiece(ts);
       });
       drawVignette();
-      drawBanner();
+      drawSeatBar();
+      drawBanner(ts);
       if (isHost() && ts - lastHeartbeatAt > SNAPSHOT_HEARTBEAT_MS) {
         lastHeartbeatAt = ts;
         host.broadcastState(makeSnapshot());
@@ -1063,9 +1326,25 @@
         window.removeEventListener("keydown", onKeyDown);
       },
       onPeerInput(id, input) { handleAction(id, input); },
+      onPeerEvent(id, event) { handlePeerEvent(id, event); },
       onState(snapshot) { applySnapshot(snapshot); },
       getSnapshot() { return makeSnapshot(); },
-      onPlayerList() { if (isHost()) host.broadcastState(makeSnapshot()); },
+      onPlayerList() {
+        if (!isHost()) return;
+        const ids = new Set((host.getPlayers?.() || []).map((p) => p.id));
+        const s = seats();
+        let changed = false;
+        for (const seat of ["white", "black"]) {
+          if (s[seat] && !ids.has(s[seat])) {
+            state.message = `${playerName(s[seat])}'s ${seat} seat opens up.`;
+            s[seat] = null;
+            changed = true;
+          }
+        }
+        for (const id of [...remoteDrags.keys()]) if (!ids.has(id)) remoteDrags.delete(id);
+        if (changed) state.rev = (state.rev || 0) + 1;
+        host.broadcastState(makeSnapshot());
+      },
       restart() { if (isHost()) resetHostState(); },
     };
   }

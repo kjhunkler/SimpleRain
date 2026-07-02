@@ -1,6 +1,6 @@
 /* SimpleRain app shell: auto host/join, profile editing, host-owned game state. */
 
-const APP_VERSION = "1.5.2";
+const APP_VERSION = "1.5.3";
 const AUTO_CHANNEL = "simple-rain";
 const GAME_SAVE_KEY = "simplerain-host-cache";
 const MUSIC_MUTED_KEY = "simplerain-music-muted";
@@ -1417,6 +1417,11 @@ function gameHostApi() {
       if (soloMode) activeGame?.onPeerInput?.(MY_ID, input);
       else net.send({ t: "game-input", input });
     },
+    sendEvent: (event) => {
+      if (soloMode) return;
+      if (net.isHost) net.broadcast({ t: "game-event", id: MY_ID, event });
+      else net.send({ t: "game-event", event });
+    },
     broadcastState: (state) => {
       if (soloMode) {
         saveCachedGameState(state);
@@ -2384,6 +2389,11 @@ function handleHostMessage(peerId, msg) {
   } else if (msg.t === "game-input") {
     const id = peerMap.get(peerId);
     if (id) handleGameInput(id, msg.input);
+  } else if (msg.t === "game-event") {
+    const id = peerMap.get(peerId);
+    if (!id) return;
+    activeGame?.onPeerEvent?.(id, msg.event);
+    net.broadcast({ t: "game-event", id, event: msg.event });
   } else if (msg.t === "profile") {
     const id = peerMap.get(peerId);
     const player = id && players.get(id);
@@ -2455,6 +2465,8 @@ function handleClientMessage(msg) {
     renderPlayers();
   } else if (msg.t === "game-state") {
     handleGameState(msg.state);
+  } else if (msg.t === "game-event") {
+    if (msg.id && msg.id !== MY_ID) activeGame?.onPeerEvent?.(msg.id, msg.event);
   } else if (msg.t === "chat") {
     if (msg.message) acceptChatMessage(msg.message);
   } else if (msg.t === "chat-history") {
