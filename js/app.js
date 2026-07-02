@@ -1,10 +1,11 @@
 /* SimpleRain app shell: auto host/join, profile editing, host-owned game state. */
 
-const APP_VERSION = "1.2.1";
+const APP_VERSION = "1.3.0";
 const AUTO_CHANNEL = "simple-rain";
 const GAME_SAVE_KEY = "simplerain-host-cache";
 const MUSIC_MUTED_KEY = "simplerain-music-muted";
 const MUSIC_TRACKS_KEY = "simplerain-music-tracks";
+const TUTORIAL_SEEN_KEY = "simplerain-tutorial-seen";
 const LOBBY_PARAM = "lobby";
 const LOBBY_SCAN_TIMEOUT_MS = 2600;
 const LOBBY_REFRESH_COOLDOWN_MS = 4000;
@@ -113,8 +114,8 @@ function applyProfileIcon(icon) {
   broadcastProfile();
 }
 
-function renderProfileShortcuts() {
-  const colors = $("#profile-color-shortcuts");
+function renderShortcutRows(colorSel, iconSel, rerender) {
+  const colors = $(colorSel);
   if (colors) {
     colors.innerHTML = "";
     for (const color of COLORS) {
@@ -124,11 +125,11 @@ function renderProfileShortcuts() {
       button.type = "button";
       button.style.background = color;
       button.setAttribute("aria-label", `Use color ${color}`);
-      button.onclick = () => applyProfileColor(color);
+      button.onclick = () => { applyProfileColor(color); rerender(); };
       colors.appendChild(button);
     }
   }
-  const icons = $("#profile-icon-shortcuts");
+  const icons = $(iconSel);
   if (icons) {
     icons.innerHTML = "";
     for (const icon of POND_ICON_SUGGESTIONS) {
@@ -137,10 +138,18 @@ function renderProfileShortcuts() {
       button.classList.toggle("selected", profile.icon === icon);
       button.type = "button";
       button.textContent = icon;
-      button.onclick = () => applyProfileIcon(icon);
+      button.onclick = () => { applyProfileIcon(icon); rerender(); };
       icons.appendChild(button);
     }
   }
+}
+
+function renderProfileShortcuts() {
+  renderShortcutRows("#profile-color-shortcuts", "#profile-icon-shortcuts", renderProfileShortcuts);
+}
+
+function renderWelcomeShortcuts() {
+  renderShortcutRows("#welcome-color-shortcuts", "#welcome-icon-shortcuts", renderWelcomeShortcuts);
 }
 
 function requestHostRole() {
@@ -229,6 +238,7 @@ function storedOrRandomIcon() {
 
 const MY_ID = clientId();
 const DEFAULT_NAME = "Player " + MY_ID.slice(2, 5).toUpperCase();
+const IS_NEW_USER = !localStorage.getItem("simplerain-name");
 const profile = {
   name: localStorage.getItem("simplerain-name") || DEFAULT_NAME,
   icon: storedOrRandomIcon(),
@@ -318,12 +328,38 @@ function renderOnlinePlayerList(list, entries) {
   }
 }
 
+function renderWelcomeOnlinePlayers(entries) {
+  const list = $("#welcome-online-players");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!entries.length) {
+    const empty = document.createElement("p");
+    empty.className = "lobby-left-message";
+    empty.textContent = "No other players are online right now.";
+    list.appendChild(empty);
+    return;
+  }
+  for (const entry of entries) {
+    const row = document.createElement("div");
+    row.className = "online-player-row";
+    row.innerHTML = `
+      <span class="online-player-avatar" style="background:${esc(entry.color || COLORS[0])}">${esc(displayIcon(entry.icon))}</span>
+      <span class="online-player-main">
+        <span class="online-player-name">${esc(entry.name)}</span>
+        <span class="online-player-status">${esc(presenceStatusText(entry))}</span>
+      </span>
+    `;
+    list.appendChild(row);
+  }
+}
+
 function renderPresence() {
   const entries = [...presenceRoster.values()]
     .filter((entry) => entry.id !== MY_ID)
     .sort((a, b) => String(a.name).localeCompare(String(b.name)));
   renderOnlinePlayerList($("#home-active-players"), entries);
   renderOnlinePlayerList($("#sheet-online-players"), entries);
+  renderWelcomeOnlinePlayers(entries);
 }
 
 function presenceRosterMessage() {
@@ -704,7 +740,8 @@ function wireMusicPicker() {
     const sample = event.target?.closest?.(".music-sample-btn");
     if (!sample) return;
     event.preventDefault();
-    activeGame?.sampleMusicTrack?.(sample.dataset.trackId);
+    if (activeGame?.sampleMusicTrack) activeGame.sampleMusicTrack(sample.dataset.trackId);
+    else window.SimpleRainGame?.previewTrack?.(sample.dataset.trackId);
   };
 }
 
@@ -1011,11 +1048,26 @@ function updateHostControlButtons() {
   relinquish?.classList.toggle("hidden", !showHostTools || !net.isHost);
 }
 
+function maybeShowTutorial() {
+  if (localStorage.getItem(TUTORIAL_SEEN_KEY)) return;
+  const overlay = $("#tutorial-overlay");
+  if (!overlay) return;
+  overlay.classList.remove("hidden");
+  const done = $("#btn-tutorial-done");
+  if (done) done.onclick = dismissTutorial;
+}
+
+function dismissTutorial() {
+  localStorage.setItem(TUTORIAL_SEEN_KEY, "1");
+  $("#tutorial-overlay")?.classList.add("hidden");
+}
+
 function startGame(initialState = null) {
   activeGame?.destroy?.();
   activeGame = window.SimpleRainGame.create(gameHostApi(), initialState);
   activeGame.setMusicTracks?.(selectedMusicTrackIds);
   activeGame.start?.();
+  maybeShowTutorial();
   if (pendingGameState) {
     activeGame.onState?.(pendingGameState);
     pendingGameState = null;
@@ -1206,6 +1258,32 @@ function openProfileSheet() {
 
 function closeProfileSheet() {
   $("#sheet-profile")?.classList.remove("open");
+  window.SimpleRainGame?.stopPreview?.();
+}
+
+function maybeShowWelcomeModal() {
+  if (!IS_NEW_USER) return;
+  const modal = $("#welcome-modal");
+  if (!modal) return;
+  const input = $("#input-welcome-name");
+  if (input) input.value = "";
+  renderWelcomeShortcuts();
+  renderPresence();
+  updateProfilePreview();
+  modal.classList.remove("hidden");
+  setTimeout(() => input?.focus?.(), 250);
+}
+
+function completeWelcome(startSolo) {
+  const input = $("#input-welcome-name");
+  const name = input?.value.trim();
+  profile.name = name || profile.name || DEFAULT_NAME;
+  localStorage.setItem("simplerain-name", profile.name);
+  profiles.set(MY_ID, { ...profiles.get(MY_ID), name: profile.name });
+  updateProfilePreview();
+  broadcastProfile();
+  $("#welcome-modal")?.classList.add("hidden");
+  if (startSolo) startSoloGame();
 }
 
 function updateProfilePreview() {
@@ -1230,6 +1308,12 @@ function updateProfilePreview() {
     homeDot.style.background = color;
     homeDot.textContent = displayIcon(profile.icon);
     homeDot.title = profile.name;
+  }
+  const welcomeDot = $("#welcome-preview-dot");
+  if (welcomeDot) {
+    welcomeDot.style.background = color;
+    welcomeDot.textContent = displayIcon(profile.icon);
+    welcomeDot.title = profile.name;
   }
 }
 
@@ -1699,6 +1783,16 @@ $("#input-icon")?.addEventListener("input", (event) => {
 $("#input-home-lobby-code")?.addEventListener("input", (event) => {
   event.target.value = event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
 });
+$("#input-welcome-name")?.addEventListener("input", (event) => {
+  profile.name = event.target.value.trim() || DEFAULT_NAME;
+  profiles.set(MY_ID, { ...profiles.get(MY_ID), name: profile.name });
+  updateProfilePreview();
+});
+$("#input-welcome-name")?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") completeWelcome(false);
+});
+$("#btn-welcome-solo")?.addEventListener("click", () => completeWelcome(true));
+$("#btn-welcome-browse")?.addEventListener("click", () => completeWelcome(false));
 document.addEventListener("click", (event) => {
   const picker = $("#music-picker");
   if (!picker?.classList.contains("open") || picker.contains(event.target)) return;
@@ -1741,5 +1835,6 @@ registerServiceWorker();
 renderPresence();
 renderFlowerLobbies();
 enterHomeScreen(true);
+maybeShowWelcomeModal();
 presenceNet.migrate(PRESENCE_CHANNEL, false);
 render();

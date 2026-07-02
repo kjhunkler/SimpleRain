@@ -135,9 +135,54 @@
     </div>
   </div>
 
+  <div id="welcome-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
+    <div class="modal-card welcome-card">
+      <h2 id="welcome-title">Welcome to the pond</h2>
+      <p class="modal-subtitle">Set up your profile before you step into the rain.</p>
+      <div class="welcome-identity">
+        <div id="welcome-preview-dot" class="preview-dot" aria-hidden="true"></div>
+        <div class="field-group welcome-name-field">
+          <label for="input-welcome-name">Your name</label>
+          <input id="input-welcome-name" type="text" class="text-input" maxlength="20" autocomplete="off" placeholder="What should we call you?" />
+        </div>
+      </div>
+      <div class="profile-shortcuts">
+        <h3>Quick Colors</h3>
+        <div id="welcome-color-shortcuts" class="shortcut-row"></div>
+      </div>
+      <div class="profile-shortcuts">
+        <h3>Pond Friends</h3>
+        <div id="welcome-icon-shortcuts" class="shortcut-row"></div>
+      </div>
+      <div class="manage-group welcome-online-group">
+        <h3>Players Online Now</h3>
+        <div id="welcome-online-players" class="online-player-list"></div>
+      </div>
+      <div class="welcome-actions">
+        <button id="btn-welcome-solo" class="btn btn-primary btn-big" type="button">Play Solo</button>
+        <button id="btn-welcome-browse" class="btn" type="button">Explore Lobbies</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="tutorial-overlay" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="tutorial-title">
+    <div class="modal-card tutorial-card">
+      <h2 id="tutorial-title">How to play</h2>
+      <p class="modal-subtitle">Rain tiles onto the lake and coax all eight blossoms to bloom.</p>
+      <ul class="tutorial-list">
+        <li><span class="tutorial-emoji">🁢</span><span><strong>Place tiles.</strong> Drag your tile onto a glowing space beside the lake. Edges must match their neighbors.</span></li>
+        <li><span class="tutorial-emoji">🔄</span><span><strong>Rotate.</strong> Tap your hand tile (or press <kbd>R</kbd> / <kbd>Space</kbd>) to turn it.</span></li>
+        <li><span class="tutorial-emoji">🎴</span><span><strong>Shuffle.</strong> Tap the deck (or press <kbd>D</kbd>) to swap your tile for another.</span></li>
+        <li><span class="tutorial-emoji">🌸</span><span><strong>Bloom.</strong> Complete matching patterns to open blossoms. All eight blossoms win the round.</span></li>
+        <li><span class="tutorial-emoji">💧</span><span><strong>Play in the pond.</strong> Tap the water for ripples, nudge lily pads, and say hi to the koi.</span></li>
+      </ul>
+      <button id="btn-tutorial-done" class="btn btn-primary" type="button">Let it rain</button>
+    </div>
+  </div>
+
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <script src="js/peer-net.js?v=1.2.1"></script>
-  <script src="js/games/simple-rain.js?v=1.2.1"></script>
-  <script src="js/app.js?v=1.2.1"></script>
+  <script src="js/peer-net.js?v=1.3.0"></script>
+  <script src="js/games/simple-rain.js?v=1.3.0"></script>
+  <script src="js/app.js?v=1.3.0"></script>
 </body>
 </html>

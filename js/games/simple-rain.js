@@ -238,6 +238,81 @@
     },
   ];
 
+  function noteFreq(note) {
+    return 440 * Math.pow(2, (note - 69) / 12);
+  }
+
+  /* Single-instance music preview. Owns its own AudioContext so previews work
+   * even without an active game, tracks every scheduled node so a new preview
+   * (or a stop) always silences the previous one instead of stacking.
+   */
+  const preview = { ctx: null, nodes: [], timer: null, trackId: null, onEnd: null };
+
+  function stopMusicPreview() {
+    if (preview.timer) {
+      clearTimeout(preview.timer);
+      preview.timer = null;
+    }
+    for (const node of preview.nodes) {
+      try { node.gain.gain.cancelScheduledValues(0); node.gain.gain.value = 0; } catch {}
+      try { node.osc.stop(); } catch {}
+      try { node.osc.disconnect(); } catch {}
+      try { node.gain.disconnect(); } catch {}
+    }
+    preview.nodes = [];
+    preview.trackId = null;
+    const done = preview.onEnd;
+    preview.onEnd = null;
+    if (done) { try { done(); } catch {} }
+  }
+
+  function previewMusicTrack(id, onEnd) {
+    const track = MUSIC_TRACKS.find((t) => t.id === id);
+    if (!track) return false;
+    stopMusicPreview();
+    try {
+      preview.ctx = preview.ctx || new (window.AudioContext || window.webkitAudioContext)();
+      if (preview.ctx.state === "suspended") preview.ctx.resume().catch(() => {});
+      const ctx = preview.ctx;
+      const t = ctx.currentTime + 0.05;
+      const beat = track.beat;
+      const bar = track.bars[0];
+      const strum = track.strum ?? 0.09;
+      const chordWave = track.chordWave || "triangle";
+      const melWave = track.melWave || "sine";
+      const tone = (freq, start, dur, vol, type, attack = 0.05) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, start);
+        osc.frequency.exponentialRampToValueAtTime(freq * 0.996, start + dur);
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(vol, start + attack);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(start);
+        osc.stop(start + dur + 0.05);
+        preview.nodes.push({ osc, gain });
+      };
+      tone(noteFreq(bar.bass), t, beat * 3.6, 0.008, track.bassWave || "triangle", 0.20);
+      bar.chord.forEach((note, i) => {
+        tone(noteFreq(note), t + strum * i, beat * 3.4 - 0.07 * i, 0.006, chordWave, 0.16);
+      });
+      for (const [beatPos, note, durBeats] of bar.mel) {
+        if (note === null) continue;
+        tone(noteFreq(note), t + beatPos * beat, durBeats * beat, 0.013, melWave, 0.05);
+      }
+      preview.trackId = id;
+      preview.onEnd = onEnd || null;
+      preview.timer = setTimeout(stopMusicPreview, (beat * 4 + 0.5) * 1000);
+      return true;
+    } catch {
+      stopMusicPreview();
+      return false;
+    }
+  }
+
   function create(host, initialState) {
     const canvas = host.canvas;
     let ctx = canvas.getContext("2d");
@@ -258,7 +333,6 @@
     let selectedMusicTrackIds = host.getSelectedMusicTracks?.() || [];
     let musicShuffleQueue = [];
     let currentMusicTrack = null;
-    let sampleGain = null;
     let musicNextBarAt = 0;
     let eventSeq = 0;
     let seenEventSeq = 0;
@@ -345,21 +419,7 @@
       return audioCtx;
     }
 
-    function ensureSampleGain() {
-      ensureAudio();
-      if (!sampleGain) {
-        sampleGain = audioCtx.createGain();
-        sampleGain.gain.value = 1;
-        sampleGain.connect(audioCtx.destination);
-      }
-      return sampleGain;
-    }
-
-    function noteFreq(note) {
-      return 440 * Math.pow(2, (note - 69) / 12);
-    }
-
-function musicTrack(id) {
+    function musicTrack(id) {
   return MUSIC_TRACKS.find((track) => track.id === id) || null;
 }
 
@@ -510,26 +570,18 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       startMusic();
     }
 
+    function restoreMusicAfterPreview() {
+      if (musicGain && audioCtx && !host.isMusicMuted?.()) {
+        musicGain.gain.setTargetAtTime(1, audioCtx.currentTime, 0.4);
+      }
+    }
+
     function sampleMusicTrack(id) {
-      const track = musicTrack(id);
-      if (!track) return;
-      try {
-        const destination = ensureSampleGain();
-        const t = audioCtx.currentTime + 0.03;
-        const beat = track.beat;
-        const bar = track.bars[0];
-        const strum = track.strum ?? 0.09;
-        const chordWave = track.chordWave || "triangle";
-        const melWave = track.melWave || "sine";
-        playMusicTone(noteFreq(bar.bass), t, beat * 3.6, 0.008, track.bassWave || "triangle", destination, 0.20);
-        bar.chord.forEach((note, i) => {
-          playMusicTone(noteFreq(note), t + strum * i, beat * 3.4 - 0.07 * i, 0.006, chordWave, destination, 0.16);
-        });
-        for (const [beatPos, note, durBeats] of bar.mel) {
-          if (note === null) continue;
-          playMusicTone(noteFreq(note), t + beatPos * beat, durBeats * beat, 0.013, melWave, destination, 0.05);
-        }
-      } catch {}
+      if (!musicTrack(id)) return;
+      const started = previewMusicTrack(id, restoreMusicAfterPreview);
+      if (started && musicGain && audioCtx && !host.isMusicMuted?.()) {
+        musicGain.gain.setTargetAtTime(0.08, audioCtx.currentTime, 0.08);
+      }
     }
 
     function emitEvent(kind, x = 0.5, y = 0.5, color = "#ffffff") {
@@ -2536,6 +2588,7 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       destroy() {
         cancelAnimationFrame(rafId);
         stopMusic();
+        stopMusicPreview();
         if (activePointerId !== null && canvas.hasPointerCapture?.(activePointerId)) canvas.releasePointerCapture(activePointerId);
         activePointerId = null;
         window.removeEventListener("resize", resize);
@@ -2581,6 +2634,8 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
     name: "SimpleRain",
     emoji: "🌧️",
     musicTracks: MUSIC_TRACKS.map(({ id, name, mood }) => ({ id, name, mood })),
+    previewTrack: previewMusicTrack,
+    stopPreview: stopMusicPreview,
     create,
   };
 })();
