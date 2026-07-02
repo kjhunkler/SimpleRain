@@ -9,8 +9,6 @@
   const TILE_VALIDATION_INTERVAL_MS = 2400;
   const ENJOYMENT_MESSAGE_CHANCE = 0.28;
   const TILE_COUNT = 28;
-  const SHUFFLE_LIMIT = 2;
-  const SHUFFLE_WINDOW_MS = 5000;
   const BLOSSOMS = [
     { key: "lotus", name: "Rose Lotus", color: "#f4a6cf", center: "#ffe5a8", petals: 8, design: "lotus" },
     { key: "iris", name: "Purple Iris", color: "#a993ff", center: "#fff0a8", petals: 5, design: "iris" },
@@ -351,7 +349,6 @@
     const drops = [];
     const ripples = [];
     const particles = [];
-    const shuffleAttemptsByPlayer = new Map();
     const perf = { frames: 0, drawMs: 0, effectsMs: 0, snapshotMs: 0, snapshots: 0 };
 
     const state = {
@@ -787,7 +784,6 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
     }
 
     function resetHostState() {
-      shuffleAttemptsByPlayer.clear();
       const deck = shuffleTiles(makeTiles());
       const start = deck.shift();
       state.board = { [key(0, 0)]: { tile: start, rot: 0, owner: "system", turn: 0 } };
@@ -914,16 +910,6 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       const current = currentFor(id);
       const hand = state.hands[id] || [];
       if (!current?.tile || !hand.length || state.over) return;
-      const t = now();
-      const attempts = (shuffleAttemptsByPlayer.get(id) || []).filter((time) => t - time < SHUFFLE_WINDOW_MS);
-      if (attempts.length >= SHUFFLE_LIMIT) {
-        const remaining = Math.max(1, Math.ceil((SHUFFLE_WINDOW_MS - (t - attempts[0])) / 1000));
-        state.message = `Shuffle cooldown: wait ${remaining}s before shuffling your deck again.`;
-        shuffleAttemptsByPlayer.set(id, attempts);
-        return;
-      }
-      attempts.push(t);
-      shuffleAttemptsByPlayer.set(id, attempts);
       hand.push(current.tile);
       for (let i = hand.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
