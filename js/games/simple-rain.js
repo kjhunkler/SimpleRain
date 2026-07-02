@@ -267,6 +267,7 @@
     let drawAnim = null;
     let boardGesture = null;
     let lastTapAt = 0;
+    let pendingTap = null;
     let handMessage = { text: "", previous: "", changedAt: 0, duration: 520 };
     const activePointers = new Map();
     const view = { zoom: 1, rot: 0, panX: 0, panY: 0 };
@@ -1181,9 +1182,13 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
 
     function updatePad(e, step, t) {
       gentleSteer(e, t, 0.00035);
-      e.x += e.vx * step;
-      e.y += e.vy * step;
-      e.angle += e.spin * step * 16.67;
+      e.x += (e.vx + (e.nudgeVx || 0)) * step;
+      e.y += (e.vy + (e.nudgeVy || 0)) * step;
+      e.angle += (e.spin + (e.spinBoost || 0)) * step * 16.67;
+      const decay = Math.pow(0.94, step);
+      e.nudgeVx = (e.nudgeVx || 0) * decay;
+      e.nudgeVy = (e.nudgeVy || 0) * decay;
+      e.spinBoost = (e.spinBoost || 0) * decay;
       steerIntoPond(e, t, 0.0008);
     }
 
@@ -1197,10 +1202,9 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
     }
 
     function updateSwimmerSpeed(e, t) {
-      if (e.type !== "koi") return;
       if (t < e.burstUntil) return;
       e.speed = e.baseSpeed;
-      if (seeded(e.seed, Math.floor(t / 2400)) > 0.982) {
+      if (e.type === "koi" && seeded(e.seed, Math.floor(t / 2400)) > 0.982) {
         e.speed = e.baseSpeed * (2.4 + seeded(e.seed, Math.floor(t / 1900) + 21) * 2.0);
         e.burstUntil = t + 900 + seeded(e.seed, Math.floor(t / 1700) + 22) * 1500;
       }
@@ -1311,6 +1315,52 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       if (!inPond(x, y)) return;
       pond.ripples.push({ x, y, r, life: 0, max: 1600 });
       while (pond.ripples.length > 48) pond.ripples.shift();
+    }
+
+    function pondTapAt(px, py) {
+      const g = screenToGrid(px, py);
+      if (!pondCellAt(g.x, g.y)) return;
+      const t = now();
+      scareFishNear(g, t);
+      const pad = padAt(g);
+      if (pad) nudgePad(pad, g);
+      addPondRipple(g.x, g.y, pad ? 0.10 : 0.07);
+    }
+
+    function padAt(g) {
+      let best = null, bestD = Infinity;
+      for (const e of pond.entities) {
+        if (e.type !== "pad") continue;
+        const d = Math.hypot(e.x - g.x, e.y - g.y);
+        if (d <= e.radius + 0.03 && d < bestD) { best = e; bestD = d; }
+      }
+      return best;
+    }
+
+    function nudgePad(e, g) {
+      const dx = e.x - g.x, dy = e.y - g.y;
+      const d = Math.hypot(dx, dy);
+      const a = d > 0.001 ? Math.atan2(dy, dx) : Math.random() * Math.PI * 2;
+      e.nudgeVx = (e.nudgeVx || 0) + Math.cos(a) * 0.006;
+      e.nudgeVy = (e.nudgeVy || 0) + Math.sin(a) * 0.006;
+      e.spinBoost = (e.spinBoost || 0) + (Math.random() < 0.5 ? -1 : 1) * (0.0018 + Math.random() * 0.0014);
+      addPondRipple(e.x, e.y, Math.min(0.12, e.radius * 0.9));
+    }
+
+    function scareFishNear(g, t) {
+      for (const e of pond.entities) {
+        if (e.type !== "koi" && e.type !== "shadow") continue;
+        const dx = e.x - g.x, dy = e.y - g.y;
+        const d = Math.hypot(dx, dy);
+        if (d > 0.9) continue;
+        const a = d > 0.001 ? Math.atan2(dy, dx) : Math.random() * Math.PI * 2;
+        e.speed = e.baseSpeed * (e.type === "koi" ? 3.5 : 2.2);
+        e.burstUntil = t + 1200 + Math.random() * 600;
+        e.turnAt = t + 800 + Math.random() * 500;
+        e.vx = Math.cos(a) * e.speed;
+        e.vy = Math.sin(a) * e.speed;
+        addPondRipple(e.x, e.y, 0.05);
+      }
     }
 
     function addRandomPondRipple() {
@@ -2333,12 +2383,16 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       }
       if (pointIn(ui.board, p.x, p.y)) {
         e.preventDefault();
+        const g = screenToGrid(p.x, p.y);
+        const onTile = !!pondCellAt(g.x, g.y);
         if (activePointers.size === 1 && (!e.touches || e.touches.length <= 1)) {
           const t = now();
-          if (t - lastTapAt < 320) resetBoardView();
-          lastTapAt = t;
+          if (!onTile && t - lastTapAt < 320) resetBoardView();
+          lastTapAt = onTile ? 0 : t;
+          pendingTap = { x: p.x, y: p.y, at: t };
         } else {
           lastTapAt = 0;
+          pendingTap = null;
         }
         startBoardGesture();
       }
@@ -2380,6 +2434,8 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       if (drag && pointIn(ui.deck, p.x, p.y)) sendAction({ type: "swap" });
       else if (hover && legalAt(hover.x, hover.y, currentForPlacementView())) sendAction({ type: "place", x: hover.x, y: hover.y, rot: placementRotationForView() });
       else if (drag && moved < 8 && pointIn(ui.handTile, p.x, p.y)) rotateCurrent();
+      else if (!drag && pendingTap && activePointers.size <= 1 && now() - pendingTap.at < 600 && Math.hypot(p.x - pendingTap.x, p.y - pendingTap.y) < 10) pondTapAt(p.x, p.y);
+      pendingTap = null;
       drag = null;
       if (activePointerId !== null && canvas.hasPointerCapture?.(activePointerId)) canvas.releasePointerCapture(activePointerId);
       activePointerId = null;
@@ -2390,6 +2446,7 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
 
     function onLostPointerCapture(e) {
       activePointers.delete(e.pointerId ?? "mouse");
+      pendingTap = null;
       if (!activePointers.size && !drag) boardGesture = null;
     }
 

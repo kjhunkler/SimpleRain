@@ -16,19 +16,15 @@ const HOST_THROTTLE_CHECK_MS = 5000;
 const HOST_THROTTLE_DRIFT_MS = 12000;
 const HOST_WATCHDOG_MS = 15000;
 const CLIENT_WELCOME_TIMEOUT_MS = 10000;
-const COLORS = ["#ff5d5d", "#ff9d4d", "#ffd24d", "#7CFC9B", "#33ddaa", "#4dd2ff", "#4d8bff", "#7766ff", "#c98cff", "#ff6fd0", "#22cc88", "#ff6600"];
-const ICONS = ["🐸", "🐢", "🐟", "🦆", "🦋", "🐞", "🐝", "🦗", "🦎", "🐌", "🦀", "🦊", "🐰", "🦝", "🦉", "🐿️"];
-const POND_ICON_SUGGESTIONS = ["🐸", "🐢", "🐟", "🦆", "🦋", "🐞", "🐝", "🦗", "🦎", "🐌", "🦀", "🐿️"];
+const COLORS = ["#ff5d5d", "#ff9d4d", "#ffd24d", "#7CFC9B", "#33ddaa", "#4dd2ff", "#4d8bff", "#7766ff", "#c98cff", "#ff6fd0", "#22cc88", "#ff6600", "#aef359", "#ff8fb3", "#f5f3e7", "#c98d5f"];
+const ICONS = ["🐸", "🐢", "🐟", "🦆", "🦋", "🐞", "🐝", "🦗", "🦎", "🐌", "🦀", "🦊", "🐰", "🦝", "🦉", "🐿️", "🦢", "🐠"];
+const POND_ICON_SUGGESTIONS = ["🐸", "🐢", "🐟", "🦆", "🦋", "🐞", "🐝", "🦗", "🦎", "🐌", "🦀", "🐿️", "🦢", "🐠"];
 const INVITE_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const HOST_REQUEST_COOLDOWN_MS = 60000;
 const FLOWER_LOBBIES = [
   { key: "lotus", name: "Lotus", art: "lotus", color: "#f4a6cf" },
   { key: "iris", name: "Iris", art: "iris", color: "#a993ff" },
   { key: "lily", name: "Lily", art: "lily", color: "#f7f0bd" },
-  { key: "clover", name: "Clover", art: "clover", color: "#8ce8bc" },
-  { key: "anemone", name: "Anemone", art: "anemone", color: "#8ed8ff" },
-  { key: "poppy", name: "Poppy", art: "poppy", color: "#ff9a76" },
-  { key: "aster", name: "Aster", art: "aster", color: "#d9a6ff" },
   { key: "orchid", name: "Orchid", art: "orchid", color: "#94d78d" },
 ];
 
@@ -291,35 +287,7 @@ function presenceStatusText(entry) {
   return "On the home screen";
 }
 
-function presenceHostId(entry) {
-  return entry.status === "hosting" ? entry.id : null;
-}
-
-function renderPresence() {
-  const entries = [...presenceRoster.values()]
-    .filter((entry) => entry.id !== MY_ID)
-    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
-  const home = $("#home-online-pads");
-  if (home) {
-    home.innerHTML = "";
-    for (const entry of entries.slice(0, 10)) {
-      const button = document.createElement("button");
-      button.className = "online-player-pill";
-      button.type = "button";
-      button.title = `${entry.name} - ${presenceStatusText(entry)}`;
-      button.innerHTML = playerPillHtml({
-        id: entry.id,
-        name: entry.name,
-        color: entry.color || COLORS[0],
-        icon: entry.icon,
-      }, presenceHostId(entry));
-      button.disabled = entry.status !== "hosting" || !entry.lobby;
-      button.onclick = () => joinPresencePlayer(entry.id);
-      home.appendChild(button);
-    }
-  }
-
-  const list = $("#sheet-online-players");
+function renderOnlinePlayerList(list, entries) {
   if (!list) return;
   list.innerHTML = "";
   if (!entries.length) {
@@ -348,6 +316,14 @@ function renderPresence() {
     row.querySelector(".online-invite-btn").onclick = () => invitePresencePlayer(entry.id);
     list.appendChild(row);
   }
+}
+
+function renderPresence() {
+  const entries = [...presenceRoster.values()]
+    .filter((entry) => entry.id !== MY_ID)
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  renderOnlinePlayerList($("#home-active-players"), entries);
+  renderOnlinePlayerList($("#sheet-online-players"), entries);
 }
 
 function presenceRosterMessage() {
@@ -1102,12 +1078,7 @@ function startLocalGame(initialState, fresh, status) {
 }
 
 function leaveLobby() {
-  const wasSolo = soloMode;
-  const message = wasSolo
-    ? "Leave this solo game? You can continue it later from the home screen."
-    : "Leave this lobby? Other players will stay in the current lobby.";
-  if (!confirm(message)) return;
-  if (wasSolo) saveCachedGameState(snapshotGame());
+  if (soloMode) saveCachedGameState(snapshotGame());
   stopHostLoop();
   stopHostWatchdog();
   clearHandoffTimer();
@@ -1767,6 +1738,7 @@ wireNetEvents();
 wirePresenceEvents();
 wirePageLifecycle();
 registerServiceWorker();
+renderPresence();
 renderFlowerLobbies();
 enterHomeScreen(true);
 presenceNet.migrate(PRESENCE_CHANNEL, false);

@@ -222,37 +222,6 @@ input, textarea, select {
   .flower-lobby-card, .flower-art, .btn { transition: none; }
 }
 
-.home-online-pills {
-  width: min(100%, 720px);
-  min-height: 44px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 2px;
-}
-
-.online-player-pill {
-  border: 1px solid var(--edge);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: var(--panel-glass);
-  backdrop-filter: blur(6px);
-  color: var(--text);
-  padding: 8px 14px;
-  border-radius: 20px;
-  font: inherit;
-  transition: transform 0.12s ease, border-color 0.2s ease;
-}
-.online-player-pill:hover { border-color: rgba(77, 210, 255, 0.45); }
-
-.online-player-pill:active { transform: scale(0.96); }
-.online-player-pill:disabled { cursor: default; opacity: 0.72; }
-.online-player-pill:disabled:active { transform: none; }
-
 .home-lobby-controls {
   width: min(100%, 720px);
   display: flex;

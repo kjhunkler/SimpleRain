@@ -15,7 +15,6 @@
     <section id="screen-loading" class="screen active">
       <div class="rain-layer" id="rain-layer" aria-hidden="true"></div>
       <div class="mist-layer" aria-hidden="true"></div>
-      <div id="home-online-pads" class="home-online-pills" aria-label="Online players"></div>
       <svg class="title-lotus" viewBox="0 0 512 512" role="img" aria-label="Lotus flower">
         <path d="M256 86c38 52 52 103 42 154-6 31-21 61-42 90-21-29-36-59-42-90-10-51 4-102 42-154Z" fill="#f7c7df"/>
         <path d="M151 150c57 21 95 55 113 101 12 31 14 64 5 101-38-9-68-27-91-52-34-38-43-88-27-150Z" fill="#f19ac8"/>
@@ -31,6 +30,10 @@
       <div id="home-lobby-controls" class="home-lobby-controls">
         <button id="btn-continue-game" class="btn btn-big hidden" type="button">Continue</button>
         <button id="btn-play-solo" class="btn btn-primary btn-big" type="button">Solo</button>
+        <section class="home-section" aria-labelledby="active-players-title">
+          <h2 id="active-players-title">Active Players</h2>
+          <div id="home-active-players" class="online-player-list" aria-live="polite"></div>
+        </section>
         <section class="home-section" aria-labelledby="flower-lobbies-title">
           <div class="home-section-header">
             <h2 id="flower-lobbies-title">Flower Lobbies</h2>
