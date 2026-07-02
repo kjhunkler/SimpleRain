@@ -155,6 +155,48 @@ input, textarea, select {
   letter-spacing: 0.02em;
 }
 
+.mode-toggle {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  margin: 0 auto 6px;
+  border: 1px solid var(--edge);
+  border-radius: 16px;
+  background: var(--panel-glass);
+  backdrop-filter: blur(10px);
+}
+
+.mode-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 22px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.02rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease, transform 0.12s ease;
+}
+.mode-toggle-btn:active { transform: scale(0.96); }
+.mode-toggle-btn:focus-visible { outline: 2px solid var(--accent2); outline-offset: 2px; }
+.mode-toggle-btn.active {
+  background: linear-gradient(180deg, rgba(38, 66, 88, 0.95), rgba(21, 39, 54, 0.98));
+  border-color: rgba(124, 252, 155, 0.45);
+  color: var(--text);
+  box-shadow: 0 4px 14px rgba(77, 210, 255, 0.16);
+}
+.mode-toggle-emoji { font-size: 1.15rem; line-height: 1; }
+
+.chess-glyph {
+  font-size: 2.1rem;
+  line-height: 1;
+  color: #10202b;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
 
 /* ===== Buttons ===== */
 .btn {

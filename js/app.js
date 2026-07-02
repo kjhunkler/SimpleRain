@@ -1,6 +1,6 @@
 /* SimpleRain app shell: auto host/join, profile editing, host-owned game state. */
 
-const APP_VERSION = "1.4.0";
+const APP_VERSION = "1.5.0";
 const AUTO_CHANNEL = "simple-rain";
 const GAME_SAVE_KEY = "simplerain-host-cache";
 const MUSIC_MUTED_KEY = "simplerain-music-muted";
@@ -32,6 +32,39 @@ const FLOWER_LOBBIES = [
   { key: "lily", name: "Lily", art: "lily", color: "#f7f0bd" },
   { key: "orchid", name: "Orchid", art: "orchid", color: "#94d78d" },
 ];
+const CHESS_LOBBIES = [
+  { key: "pawn", name: "Pawn Pond", glyph: "♟", color: "#8ce8bc" },
+  { key: "knight", name: "Knight Reeds", glyph: "♞", color: "#8ed8ff" },
+  { key: "rook", name: "Rook Rock", glyph: "♜", color: "#ffb08a" },
+  { key: "queen", name: "Queen Lily", glyph: "♛", color: "#d9a6ff" },
+];
+const GAME_MODE_KEY = "simplerain-game-mode";
+const GAME_MODES = {
+  flower: {
+    key: "flower",
+    name: "SimpleRain",
+    titleHtml: "Simple<span>Rain</span>",
+    tagline: "Rain on the water. A tile, a blossom, a quiet afternoon.",
+    lobbySectionTitle: "Flower Lobbies",
+    lobbies: FLOWER_LOBBIES,
+    presetPrefix: `${AUTO_CHANNEL}-`,
+    codePrefix: "",
+    saveKey: GAME_SAVE_KEY,
+    module: () => window.SimpleRainGame,
+  },
+  chess: {
+    key: "chess",
+    name: "SimpleChess",
+    titleHtml: "Simple<span>Chess</span>",
+    tagline: "Two courts across a quiet pond. Your move.",
+    lobbySectionTitle: "Chess Lobbies",
+    lobbies: CHESS_LOBBIES,
+    presetPrefix: "simple-chess-",
+    codePrefix: "chess-",
+    saveKey: "simplechess-host-cache",
+    module: () => window.SimpleChessGame,
+  },
+};
 
 const $ = (sel) => document.querySelector(sel);
 const screens = { loading: $("#screen-loading"), play: $("#screen-play") };
@@ -98,6 +131,80 @@ function initialLobbyChannel() {
     return lobby ? normalizeLobbyChannel(lobby) : "";
   } catch {
     return "";
+  }
+}
+
+function modeForChannel(channel) {
+  const normalized = normalizeLobbyChannel(channel);
+  const chess = GAME_MODES.chess;
+  return normalized.startsWith(chess.codePrefix) || normalized.startsWith(chess.presetPrefix) || normalized === "simple-chess" ? "chess" : "flower";
+}
+
+function initialGameMode() {
+  if (sessionChannel) return modeForChannel(sessionChannel);
+  const stored = localStorage.getItem(GAME_MODE_KEY);
+  return GAME_MODES[stored] ? stored : "flower";
+}
+
+let activeModeKey = initialGameMode();
+
+function currentMode() {
+  return GAME_MODES[activeModeKey] || GAME_MODES.flower;
+}
+
+function gameModule() {
+  return currentMode().module() || window.SimpleRainGame;
+}
+
+function presetLobbyChannel(mode, lobby) {
+  return `${mode.presetPrefix}${lobby.key}`;
+}
+
+function codeLobbyChannel(code) {
+  return normalizeLobbyChannel(`${currentMode().codePrefix}${code}`);
+}
+
+function displayCodeForChannel(channel) {
+  let code = normalizeLobbyChannel(channel);
+  const chess = GAME_MODES.chess;
+  if (code.startsWith(chess.codePrefix)) code = code.slice(chess.codePrefix.length);
+  return code.includes("-") ? "" : code;
+}
+
+function setGameMode(key, { refreshLobbies = true } = {}) {
+  if (!GAME_MODES[key]) key = "flower";
+  const changed = activeModeKey !== key;
+  activeModeKey = key;
+  localStorage.setItem(GAME_MODE_KEY, key);
+  renderModeToggle();
+  renderHomeModeText();
+  updateContinueButton();
+  if (!changed) return;
+  renderModeLobbies();
+  if (refreshLobbies && !inLobby && !soloMode) refreshModeLobbies();
+}
+
+function renderModeToggle() {
+  for (const button of document.querySelectorAll("#mode-toggle .mode-toggle-btn")) {
+    const active = button.dataset.mode === activeModeKey;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  }
+}
+
+function renderHomeModeText() {
+  const mode = currentMode();
+  const title = $("#home-title");
+  if (title) title.innerHTML = mode.titleHtml;
+  const tagline = $("#home-tagline");
+  if (tagline) tagline.textContent = mode.tagline;
+  const heading = $("#flower-lobbies-title");
+  if (heading) heading.textContent = mode.lobbySectionTitle;
+}
+
+function wireModeToggle() {
+  for (const button of document.querySelectorAll("#mode-toggle .mode-toggle-btn")) {
+    button.onclick = () => setGameMode(button.dataset.mode);
   }
 }
 
@@ -176,10 +283,6 @@ function requestHostRole() {
 function relinquishHostRole() {
   if (!inLobby || soloMode || !net.isHost) return;
   beginHostHandoff("Relinquishing host...");
-}
-
-function flowerLobbyChannel(lobby) {
-  return `${AUTO_CHANNEL}-${lobby.key}`;
 }
 
 function randomLobbyCode() {
@@ -264,7 +367,11 @@ function currentPresenceStatus() {
 
 function lobbyDisplayName(channel = sessionChannel) {
   if (!channel) return "";
-  return FLOWER_LOBBIES.find((lobby) => flowerLobbyChannel(lobby) === channel)?.name || channel.toUpperCase();
+  const modeKey = modeForChannel(channel);
+  const mode = GAME_MODES[modeKey];
+  const preset = mode.lobbies.find((lobby) => presetLobbyChannel(mode, lobby) === channel);
+  const base = preset?.name || (displayCodeForChannel(channel) || channel).toUpperCase();
+  return modeKey === "chess" ? `${base} · Chess` : base;
 }
 
 function presencePayload() {
@@ -1149,9 +1256,9 @@ function setStatus(text) {
 function setHostReachability(value) {
   hostReachability = value;
   if (!net.isHost) return;
-  if (value === "confirmed") setStatus("Hosting SimpleRain - reachable");
-  else if (value === "suspect") setStatus("Hosting SimpleRain - connection may be throttled");
-  else setStatus("Hosting SimpleRain - waiting for first connection");
+  if (value === "confirmed") setStatus(`Hosting ${currentMode().name} - reachable`);
+  else if (value === "suspect") setStatus(`Hosting ${currentMode().name} - connection may be throttled`);
+  else setStatus(`Hosting ${currentMode().name} - waiting for first connection`);
 }
 
 function availableMusicTracks() {
@@ -1263,17 +1370,17 @@ function renderProfileButtons(hostId = soloMode ? null : net.isHost ? MY_ID : la
 }
 
 function loadCachedGameState() {
-  try { return JSON.parse(localStorage.getItem(GAME_SAVE_KEY) || "null")?.state || null; } catch { return null; }
+  try { return JSON.parse(localStorage.getItem(currentMode().saveKey) || "null")?.state || null; } catch { return null; }
 }
 
 function saveCachedGameState(state) {
   if (!state) return;
-  try { localStorage.setItem(GAME_SAVE_KEY, JSON.stringify({ savedAt: Date.now(), state })); } catch {}
+  try { localStorage.setItem(currentMode().saveKey, JSON.stringify({ savedAt: Date.now(), state })); } catch {}
   updateContinueButton();
 }
 
 function clearCachedGameState() {
-  try { localStorage.removeItem(GAME_SAVE_KEY); } catch {}
+  try { localStorage.removeItem(currentMode().saveKey); } catch {}
   updateContinueButton();
 }
 
@@ -1399,7 +1506,8 @@ function updateLobbyControls() {
   $("#lobby-left-controls")?.classList.toggle("hidden", playing);
   $("#home-lobby-controls")?.classList.toggle("hidden", false);
   const homeCode = $("#input-home-lobby-code");
-  if (homeCode && !homeCode.value && sessionChannel) homeCode.value = sessionChannel;
+  const sessionCode = sessionChannel ? displayCodeForChannel(sessionChannel) : "";
+  if (homeCode && !homeCode.value && sessionCode) homeCode.value = sessionCode.toUpperCase();
   updateHostControlButtons();
   updateChatControls();
 }
@@ -1409,7 +1517,7 @@ function lobbyInfoPayload() {
   return {
     t: "lobby-info",
     channel: sessionChannel,
-    name: FLOWER_LOBBIES.find((lobby) => flowerLobbyChannel(lobby) === sessionChannel)?.name || sessionChannel,
+    name: lobbyDisplayName(sessionChannel) || sessionChannel,
     hostName: profile.name,
     hostId: MY_ID,
     playerCount: visible.length || players.size || 1,
@@ -1529,12 +1637,18 @@ function flowerArt(lobby) {
   return "";
 }
 
-function renderFlowerLobbies(results = new Map()) {
+function lobbyCardArt(lobby) {
+  if (lobby.glyph) return `<span class="chess-glyph" aria-hidden="true">${esc(lobby.glyph)}</span>`;
+  return flowerArt(lobby);
+}
+
+function renderModeLobbies(results = new Map()) {
   const list = $("#flower-lobby-list");
   if (!list) return;
+  const mode = currentMode();
   list.innerHTML = "";
-  for (const lobby of FLOWER_LOBBIES) {
-    const channel = flowerLobbyChannel(lobby);
+  for (const lobby of mode.lobbies) {
+    const channel = presetLobbyChannel(mode, lobby);
     const info = results.get(channel);
     const button = document.createElement("button");
     button.className = "flower-lobby-card";
@@ -1542,14 +1656,14 @@ function renderFlowerLobbies(results = new Map()) {
     button.style.setProperty("--flower", lobby.color);
     button.dataset.channel = channel;
     button.innerHTML = `
-      <span class="flower-art" aria-hidden="true">${flowerArt(lobby)}</span>
+      <span class="flower-art" aria-hidden="true">${lobbyCardArt(lobby)}</span>
       <span class="flower-lobby-content">
         <span class="flower-lobby-name">${esc(lobby.name)}</span>
         <span class="flower-lobby-status">${esc(lobbyStatusText(info))}</span>
         <span class="flower-lobby-meta">${esc(lobbyCardMeta(info))}</span>
       </span>
     `;
-    button.onclick = () => joinFlowerLobby(lobby);
+    button.onclick = () => joinPresetLobby(lobby);
     list.appendChild(button);
   }
 }
@@ -1561,7 +1675,7 @@ function lobbyInfoSummary(info) {
   return info.hostName ? `Host: ${info.hostName} · ${reachability}` : `Version ${info.version || "unknown"}`;
 }
 
-async function refreshFlowerLobbies() {
+async function refreshModeLobbies() {
   const now = Date.now();
   const remaining = LOBBY_REFRESH_COOLDOWN_MS - (now - lastLobbyRefreshAttemptAt);
   if (remaining > 0) {
@@ -1570,18 +1684,19 @@ async function refreshFlowerLobbies() {
   }
   lastLobbyRefreshAttemptAt = now;
   const token = ++lobbyScanToken;
+  const mode = currentMode();
   const refresh = $("#btn-refresh-lobbies");
   refresh?.setAttribute("disabled", "disabled");
-  setStatus("Checking flower lobbies...");
+  setStatus(`Checking ${mode.lobbySectionTitle.toLowerCase()}...`);
   const results = new Map();
-  renderFlowerLobbies(results);
-  for (const lobby of FLOWER_LOBBIES) {
-    if (token !== lobbyScanToken) return;
-    const channel = flowerLobbyChannel(lobby);
+  renderModeLobbies(results);
+  for (const lobby of mode.lobbies) {
+    if (token !== lobbyScanToken || mode !== currentMode()) return;
+    const channel = presetLobbyChannel(mode, lobby);
     const info = await net.probe(channel, LOBBY_SCAN_TIMEOUT_MS);
-    if (token !== lobbyScanToken) return;
+    if (token !== lobbyScanToken || mode !== currentMode()) return;
     results.set(channel, info);
-    renderFlowerLobbies(results);
+    renderModeLobbies(results);
   }
   refresh?.removeAttribute("disabled");
   setStatus("Choose how to play.");
@@ -1593,7 +1708,7 @@ function enterHomeScreen(refreshLobbies = true) {
   if (!sessionChannel) setHomeInviteCode(randomLobbyCode());
   updateLobbyControls();
   updateContinueButton();
-  if (refreshLobbies) refreshFlowerLobbies();
+  if (refreshLobbies) refreshModeLobbies();
   broadcastPresence(false);
 }
 
@@ -1610,10 +1725,10 @@ async function copyInviteLink() {
 
 async function shareInviteLink() {
   const url = inviteUrl();
-  const text = `Join my SimpleRain lobby: ${url}`;
+  const text = `Join my ${currentMode().name} lobby: ${url}`;
   if (navigator.share) {
     try {
-      await navigator.share({ title: "SimpleRain lobby", text, url });
+      await navigator.share({ title: `${currentMode().name} lobby`, text, url });
       return;
     } catch (error) {
       if (error?.name === "AbortError") return;
@@ -1671,7 +1786,7 @@ function wireManageControls() {
   const continueGame = $("#btn-continue-game");
   if (continueGame) continueGame.onclick = continueSavedGame;
   const refresh = $("#btn-refresh-lobbies");
-  if (refresh) refresh.onclick = refreshFlowerLobbies;
+  if (refresh) refresh.onclick = refreshModeLobbies;
   const refreshCache = $("#btn-refresh-cache");
   if (refreshCache) refreshCache.onclick = refreshCachedPwaFiles;
   const homeJoin = $("#btn-home-join-lobby");
@@ -1702,10 +1817,10 @@ function dismissTutorial() {
 
 function startGame(initialState = null) {
   activeGame?.destroy?.();
-  activeGame = window.SimpleRainGame.create(gameHostApi(), initialState);
+  activeGame = gameModule().create(gameHostApi(), initialState);
   activeGame.setMusicTracks?.(selectedMusicTrackIds);
   activeGame.start?.();
-  maybeShowTutorial();
+  if (activeModeKey === "flower") maybeShowTutorial();
   if (pendingGameState) {
     activeGame.onState?.(pendingGameState);
     pendingGameState = null;
@@ -1808,6 +1923,7 @@ function connectToLobby(channel, preferHost = false, openInviteWhenReady = false
   const nextChannel = normalizeLobbyChannel(channel);
   if (nextChannel !== sessionChannel) resetChatState();
   sessionChannel = nextChannel;
+  setGameMode(modeForChannel(nextChannel), { refreshLobbies: false });
   soloMode = false;
   hostReachability = "unconfirmed";
   inLobby = true;
@@ -1820,7 +1936,7 @@ function connectToLobby(channel, preferHost = false, openInviteWhenReady = false
   updateInvitePanel();
   updateLobbyControls();
   show("loading");
-  setStatus(preferHost ? "Hosting a new SimpleRain lobby..." : "Finding a SimpleRain session...");
+  setStatus(preferHost ? `Hosting a new ${currentMode().name} lobby...` : `Finding a ${currentMode().name} session...`);
   broadcastPresence(true);
   net.migrate(sessionChannel, preferHost);
   setTimeout(() => broadcastPresence(true), 500);
@@ -1830,21 +1946,21 @@ function hostNewLobby() {
   pendingGameState = null;
   activeGame?.destroy?.();
   activeGame = null;
-  const channel = newLobbyChannel();
+  const code = newLobbyChannel();
   const input = $("#input-home-lobby-code");
-  if (input) input.value = channel.toUpperCase();
-  connectToLobby(channel, true, true);
+  if (input) input.value = code.toUpperCase();
+  connectToLobby(codeLobbyChannel(code), true, true);
 }
 
 function rejoinGlobalLobby() {
   connectToLobby(AUTO_CHANNEL, false, false);
 }
 
-function joinFlowerLobby(lobby) {
+function joinPresetLobby(lobby) {
   pendingGameState = null;
   activeGame?.destroy?.();
   activeGame = null;
-  connectToLobby(flowerLobbyChannel(lobby), false, false);
+  connectToLobby(presetLobbyChannel(currentMode(), lobby), false, false);
 }
 
 function joinLobbyFromCode() {
@@ -1854,13 +1970,13 @@ function joinLobbyFromCode() {
 
 function joinLobbyFromHomeCode() {
   const code = $("#input-home-lobby-code")?.value;
-  connectToLobby(code || newLobbyChannel(), false, false);
+  connectToLobby(codeLobbyChannel(code || newLobbyChannel()), false, false);
 }
 
 function initializeHomeInviteCode() {
   const input = $("#input-home-lobby-code");
   if (!input || input.value) return;
-  setHomeInviteCode(sessionChannel ? sessionChannel.toUpperCase().slice(0, 4) : randomLobbyCode());
+  setHomeInviteCode((sessionChannel && displayCodeForChannel(sessionChannel)) || randomLobbyCode());
 }
 
 function setHomeInviteCode(code) {
@@ -1875,7 +1991,7 @@ function ensureGameStarted(initialState = null) {
 }
 
 function resetGame() {
-  if (!confirm("Reset the current SimpleRain game for everyone?")) return;
+  if (!confirm(`Reset the current ${currentMode().name} game for everyone?`)) return;
   closeProfileSheet();
   clearCachedGameState();
   if (net.isHost) {
@@ -2173,7 +2289,7 @@ function wireNetEvents() {
     handoffInProgress = false;
     clearHandoffTimer();
     clearClientWelcomeTimer();
-    setStatus("Joining SimpleRain...");
+    setStatus(`Joining ${currentMode().name}...`);
     net.send({ t: "hello", id: MY_ID, name: profile.name, icon: profile.icon, preferredColor: profile.color });
     startHostWatchdog();
     startClientWelcomeTimer();
@@ -2313,7 +2429,7 @@ function handleClientMessage(msg) {
     for (const player of lastState) profiles.set(player.id, { name: player.name, color: player.color, icon: player.icon });
     if (lastState.some((player) => player.id === MY_ID)) {
       clearClientWelcomeTimer();
-      setStatus("Joined SimpleRain");
+      setStatus(`Joined ${currentMode().name}`);
       ensureGameStarted(loadCachedGameState());
       show("play");
       updateLobbyControls();
@@ -2400,7 +2516,7 @@ function wirePageLifecycle() {
       }
       return;
     }
-    setStatus("Hosting SimpleRain");
+    setStatus(`Hosting ${currentMode().name}`);
     lastPlayersBroadcastAt = 0;
     broadcastPlayers(true);
   });
@@ -2519,13 +2635,16 @@ updateInvitePanel();
 updateLobbyControls();
 updateContinueButton();
 wireManageControls();
+wireModeToggle();
+renderModeToggle();
+renderHomeModeText();
 
 wireNetEvents();
 wirePresenceEvents();
 wirePageLifecycle();
 registerServiceWorker();
 renderPresence();
-renderFlowerLobbies();
+renderModeLobbies();
 enterHomeScreen(true);
 maybeShowWelcomeModal();
 presenceNet.migrate(PRESENCE_CHANNEL, false);

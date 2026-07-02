@@ -1,4 +1,4 @@
-const APP_VERSION = "1.4.0";
+const APP_VERSION = "1.5.0";
 const CACHE_NAME = `simplerain-${APP_VERSION}`;
 const APP_SHELL = [
   "./",
@@ -6,6 +6,7 @@ const APP_SHELL = [
   "./css/style.css",
   "./js/app.js",
   "./js/games/simple-rain.js",
+  "./js/games/simple-chess.js",
   "./js/peer-net.js",
   "./manifest.webmanifest",
   "./icons/lotus.svg"
