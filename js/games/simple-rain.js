@@ -6,7 +6,13 @@
 
   const SNAPSHOT_HEARTBEAT_MS = 2500;
   const SNAPSHOT_KEEPALIVE_MS = 10000;
-  const RENDER_FRAME_MS = 1000 / 30;
+  const DESKTOP_RENDER_FRAME_MS = 1000 / 30;
+  const MOBILE_RENDER_FRAME_MS = 1000 / 24;
+  const MOBILE_REMOTE_RENDER_FRAME_MS = 1000 / 20;
+  const DESKTOP_DPR_CAP = 2;
+  const MOBILE_DPR_CAP = 1.35;
+  const DESKTOP_POND_UPDATE_MS = 1000 / 30;
+  const MOBILE_POND_UPDATE_MS = 1000 / 15;
   const PERF_LOG_INTERVAL_MS = 5000;
   const TILE_VALIDATION_INTERVAL_MS = 2400;
   const ENJOYMENT_MESSAGE_CHANCE = 0.28;
@@ -354,6 +360,7 @@
     const perf = { frames: 0, drawMs: 0, effectsMs: 0, layoutMs: 0, snapshotMs: 0, snapshots: 0 };
     let frameTimer = null;
     let nextFrameAt = 0;
+    let pondUpdateAccumulator = 0;
     let boardVersion = 0;
     let cachedBounds = null;
     let cachedBoundsVersion = -1;
@@ -388,6 +395,18 @@
     function now() { return performance.now(); }
     function hasRemotePeers() { return host.getPlayers().some((p) => p.id !== myId); }
     function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+    function isMobileLike() {
+      return (window.matchMedia?.("(pointer: coarse)").matches || Math.min(window.innerWidth || 0, window.innerHeight || 0) <= 760);
+    }
+    function targetFrameMs() {
+      if (!isMobileLike()) return DESKTOP_RENDER_FRAME_MS;
+      return hasRemotePeers() ? MOBILE_REMOTE_RENDER_FRAME_MS : MOBILE_RENDER_FRAME_MS;
+    }
+    function targetPondUpdateMs() { return isMobileLike() ? MOBILE_POND_UPDATE_MS : DESKTOP_POND_UPDATE_MS; }
+    function effectiveDevicePixelRatio() {
+      const cap = isMobileLike() ? MOBILE_DPR_CAP : DESKTOP_DPR_CAP;
+      return Math.min(window.devicePixelRatio || 1, cap);
+    }
     function rand(min, max) { return min + Math.random() * (max - min); }
     function key(x, y) { return `${x},${y}`; }
     function parseKey(k) { const [x, y] = k.split(",").map(Number); return { x, y }; }
@@ -1064,6 +1083,7 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
 
     function applySnapshot(snapshot) {
       if (!snapshot) return;
+      const previousTileId = state.currentByPlayer?.[myId]?.tile?.id || null;
       state.board = snapshot.board || {};
       state.deck = snapshot.deck || [];
       state.hands = snapshot.hands || {};
@@ -1078,6 +1098,8 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       boardVersion++;
       applyEvents(snapshot.events);
       syncDragRotation();
+      const nextTile = state.currentByPlayer?.[myId]?.tile || null;
+      if (!isHost() && previousTileId && nextTile?.id && nextTile.id !== previousTileId) startDrawAnimation(nextTile);
     }
 
     function refreshCanvasRect() {
@@ -1094,7 +1116,7 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
     function ensureCanvasSize() {
       if (now() - cachedRect.checkedAt >= 500) refreshCanvasRect();
       const rect = cachedRect;
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = effectiveDevicePixelRatio();
       const w = Math.max(1, Math.round(rect.width * dpr));
       const h = Math.max(1, Math.round(rect.height * dpr));
       if (canvas.width !== w || canvas.height !== h) {
@@ -1259,7 +1281,7 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
         pondSyncVersion = boardVersion;
       }
       const t = now();
-      const step = Math.min(3, Math.max(0.2, dt / 16.67));
+      const step = Math.min(5, Math.max(0.2, dt / 16.67));
       for (const e of pond.entities) {
         if (e.type === "pad") updatePad(e, step, t);
         else if (e.type === "bug") updateBug(e, step, t);
@@ -1515,7 +1537,7 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       targetCtx.closePath();
     }
 
-    function drawBackground(W, H) {
+    function drawBackground(W, H, dt = 16.67) {
       const grad = ctx.createLinearGradient(0, 0, 0, H);
       grad.addColorStop(0, "#10283a");
       grad.addColorStop(0.45, "#173d4d");
@@ -1546,12 +1568,14 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       }
       ctx.restore();
 
-      while (drops.length < Math.min(90, Math.floor(W * H / 7200))) drops.push({ x: Math.random() * W, y: Math.random() * H, s: rand(0.5, 1.6), v: rand(24, 56) });
+      const dropLimit = isMobileLike() ? Math.min(56, Math.floor(W * H / 11000)) : Math.min(90, Math.floor(W * H / 7200));
+      while (drops.length < dropLimit) drops.push({ x: Math.random() * W, y: Math.random() * H, s: rand(0.5, 1.6), v: rand(24, 56) });
+      if (drops.length > dropLimit) drops.splice(0, drops.length - dropLimit);
       ctx.strokeStyle = "rgba(216,242,255,0.22)";
       ctx.lineWidth = 1;
       for (const d of drops) {
-        d.y += d.v / 60;
-        d.x += d.s * 0.08;
+        d.y += d.v * dt / 1000;
+        d.x += d.s * 4.8 * dt / 1000;
         if (d.y > H + 12) {
           if (Math.random() < 0.30) ripples.push({ x: d.x / W, y: rand(0.55, 0.97), life: 620, maxLife: 620 });
           d.y = -12;
@@ -2154,14 +2178,20 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
 
     function drawPondLife() {
       if (!pond.entities.length && !pond.ripples.length) return;
+      const shadows = [];
+      const foreground = [];
+      for (const e of pond.entities) {
+        if (e.type === "shadow") shadows.push(e);
+        else foreground.push(e);
+      }
       for (const k of Object.keys(state.board)) {
         const cell = parseKey(k);
         ctx.save();
         beginPlacedCardClip(cell.x, cell.y);
         ctx.clip();
         for (const r of pond.ripples) if (rippleOverlapsPlacedCell(r, cell.x, cell.y)) drawWorldPondRipple(r);
-        for (const e of pond.entities.filter((entity) => entity.type === "shadow")) if (entityOverlapsPlacedCell(e, cell.x, cell.y)) drawWorldPondEntity(e);
-        for (const e of pond.entities.filter((entity) => entity.type !== "shadow")) if (entityOverlapsPlacedCell(e, cell.x, cell.y)) drawWorldPondEntity(e);
+        for (const e of shadows) if (entityOverlapsPlacedCell(e, cell.x, cell.y)) drawWorldPondEntity(e);
+        for (const e of foreground) if (entityOverlapsPlacedCell(e, cell.x, cell.y)) drawWorldPondEntity(e);
         ctx.restore();
       }
     }
@@ -2381,7 +2411,7 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       ctx.restore();
     }
 
-    function draw() {
+    function draw(frameMs = 16.67) {
       if (!ensureCanvasSize()) return;
       const W = canvas.clientWidth;
       const H = canvas.clientHeight;
@@ -2389,7 +2419,7 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       layout(W, H);
       perf.layoutMs += now() - layoutStart;
       ctx.clearRect(0, 0, W, H);
-      drawBackground(W, H);
+      drawBackground(W, H, frameMs);
       drawHeader(W);
       drawBoard();
       drawEffects(W, H);
@@ -2574,8 +2604,9 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
 
     function scheduleNextFrame(ts) {
       if (frameTimer !== null || rafId) return;
-      nextFrameAt = Math.max(ts + RENDER_FRAME_MS / 2, nextFrameAt + RENDER_FRAME_MS);
-      const delay = Math.max(0, Math.min(RENDER_FRAME_MS, nextFrameAt - ts));
+      const frameMs = targetFrameMs();
+      nextFrameAt = Math.max(ts + frameMs / 2, nextFrameAt + frameMs);
+      const delay = Math.max(0, Math.min(frameMs, nextFrameAt - ts));
       frameTimer = setTimeout(() => {
         frameTimer = null;
         rafId = requestAnimationFrame(loop);
@@ -2606,7 +2637,7 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
     function loop(ts) {
       rafId = 0;
       if (!lastTs) lastTs = ts;
-      const frameMs = ts - lastTs;
+      const frameMs = Math.min(250, ts - lastTs || targetFrameMs());
       lastTs = ts;
       if (isHost() && hasRemotePeers() && ts - lastSnapshotAt >= SNAPSHOT_HEARTBEAT_MS) {
         lastSnapshotAt = ts;
@@ -2622,10 +2653,15 @@ function playMusicTone(freq, start, dur, vol, type = "sine", destination = music
       }
       const effectsStart = now();
       updateEffects(frameMs || 16, cssWidth(), cssHeight());
-      updatePondLife(frameMs || 16);
+      pondUpdateAccumulator += frameMs || 16;
+      const pondUpdateMs = targetPondUpdateMs();
+      if (pondUpdateAccumulator >= pondUpdateMs || pondSyncVersion !== boardVersion) {
+        updatePondLife(Math.min(250, pondUpdateAccumulator));
+        pondUpdateAccumulator = 0;
+      }
       perf.effectsMs += now() - effectsStart;
       const drawStart = now();
-      draw();
+      draw(frameMs || 16);
       perf.drawMs += now() - drawStart;
       perf.frames++;
       logPerf(ts);

@@ -1,6 +1,6 @@
 /* SimpleRain app shell: auto host/join, profile editing, host-owned game state. */
 
-const APP_VERSION = "1.5.6";
+const APP_VERSION = "1.5.7";
 const AUTO_CHANNEL = "simple-rain";
 const GAME_SAVE_KEY = "simplerain-host-cache";
 const MUSIC_MUTED_KEY = "simplerain-music-muted";

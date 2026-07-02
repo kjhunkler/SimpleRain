@@ -22,6 +22,11 @@
   const SPRITE_UNIT_W = 100;
   const SPRITE_UNIT_H = 122;
   const SPRITE_SCALE = 2.6;
+  const DESKTOP_RENDER_FRAME_MS = 1000 / 30;
+  const MOBILE_RENDER_FRAME_MS = 1000 / 24;
+  const MOBILE_REMOTE_RENDER_FRAME_MS = 1000 / 20;
+  const DESKTOP_DPR_CAP = 2;
+  const MOBILE_DPR_CAP = 1.35;
 
   function now() { return performance.now(); }
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
@@ -614,6 +619,8 @@
     const myId = host.myId;
 
     let rafId = 0;
+    let frameTimer = null;
+    let nextFrameAt = 0;
     let W = 0;
     let H = 0;
     let lastHeartbeatAt = 0;
@@ -644,6 +651,25 @@
     const activePointers = new Map();
     const padSeed = Math.floor(Math.random() * 1_000_000_000);
     const pads = makePads();
+    const bgLayer = { canvas: null, w: 0, h: 0 };
+    const vignetteLayer = { canvas: null, w: 0, h: 0 };
+
+    function isMobileLike() {
+      return (window.matchMedia?.("(pointer: coarse)").matches || Math.min(window.innerWidth || 0, window.innerHeight || 0) <= 760);
+    }
+
+    function hasRemotePeers() {
+      return host.getPlayers?.().some((p) => p.id !== myId) || false;
+    }
+
+    function targetFrameMs() {
+      if (!isMobileLike()) return DESKTOP_RENDER_FRAME_MS;
+      return hasRemotePeers() ? MOBILE_REMOTE_RENDER_FRAME_MS : MOBILE_RENDER_FRAME_MS;
+    }
+
+    function effectiveDevicePixelRatio() {
+      return Math.min(window.devicePixelRatio || 1, isMobileLike() ? MOBILE_DPR_CAP : DESKTOP_DPR_CAP);
+    }
 
     function defaultState() {
       return {
@@ -1086,7 +1112,7 @@
 
     function resize() {
       const rect = canvas.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = effectiveDevicePixelRatio();
       W = rect.width;
       H = rect.height;
       const w = Math.max(1, Math.round(W * dpr));
@@ -1609,7 +1635,7 @@
     }
 
     function spawnAmbientRipples() {
-      if (Math.random() >= 0.03) return;
+      if (Math.random() >= (isMobileLike() ? 0.015 : 0.03)) return;
       const b = screenToBoard(Math.random() * W, Math.random() * H);
       if (!overFrame(b)) addRipple(b.x, b.y, true);
     }
@@ -1625,21 +1651,39 @@
     }
 
     function drawBackground() {
-      const grad = ctx.createLinearGradient(0, 0, 0, H);
-      grad.addColorStop(0, "#10283a");
-      grad.addColorStop(0.45, "#173d4d");
-      grad.addColorStop(1, "#0d202d");
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, W, H);
+      if (!bgLayer.canvas || bgLayer.w !== W || bgLayer.h !== H) {
+        bgLayer.canvas = document.createElement("canvas");
+        bgLayer.canvas.width = Math.max(1, Math.round(W));
+        bgLayer.canvas.height = Math.max(1, Math.round(H));
+        bgLayer.w = W;
+        bgLayer.h = H;
+        const c = bgLayer.canvas.getContext("2d");
+        const grad = c.createLinearGradient(0, 0, 0, H);
+        grad.addColorStop(0, "#10283a");
+        grad.addColorStop(0.45, "#173d4d");
+        grad.addColorStop(1, "#0d202d");
+        c.fillStyle = grad;
+        c.fillRect(0, 0, W, H);
+      }
+      ctx.drawImage(bgLayer.canvas, 0, 0, W, H);
     }
 
     function drawVignette() {
-      const r = Math.hypot(W, H) * 0.62;
-      const grad = ctx.createRadialGradient(W / 2, H / 2, r * 0.45, W / 2, H / 2, r);
-      grad.addColorStop(0, "rgba(4, 12, 18, 0)");
-      grad.addColorStop(1, "rgba(4, 12, 18, 0.42)");
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, W, H);
+      if (!vignetteLayer.canvas || vignetteLayer.w !== W || vignetteLayer.h !== H) {
+        vignetteLayer.canvas = document.createElement("canvas");
+        vignetteLayer.canvas.width = Math.max(1, Math.round(W));
+        vignetteLayer.canvas.height = Math.max(1, Math.round(H));
+        vignetteLayer.w = W;
+        vignetteLayer.h = H;
+        const c = vignetteLayer.canvas.getContext("2d");
+        const r = Math.hypot(W, H) * 0.62;
+        const grad = c.createRadialGradient(W / 2, H / 2, r * 0.45, W / 2, H / 2, r);
+        grad.addColorStop(0, "rgba(4, 12, 18, 0)");
+        grad.addColorStop(1, "rgba(4, 12, 18, 0.42)");
+        c.fillStyle = grad;
+        c.fillRect(0, 0, W, H);
+      }
+      ctx.drawImage(vignetteLayer.canvas, 0, 0, W, H);
     }
 
     function drawRipples(ts) {
@@ -2168,8 +2212,39 @@
       ctx.fillText(mySeat() ? "Drag your pieces to move" : "Claim a seat above to play", W / 2, H - 42);
     }
 
-    function loop(ts) {
+    function scheduleNextFrame(ts) {
+      if (frameTimer !== null || rafId) return;
+      const frameMs = targetFrameMs();
+      nextFrameAt = Math.max(ts + frameMs / 2, nextFrameAt + frameMs);
+      const delay = Math.max(0, Math.min(frameMs, nextFrameAt - ts));
+      frameTimer = setTimeout(() => {
+        frameTimer = null;
+        rafId = requestAnimationFrame(loop);
+      }, delay);
+    }
+
+    function startLoop() {
+      if (rafId || frameTimer !== null || document.hidden) return;
+      nextFrameAt = 0;
       rafId = requestAnimationFrame(loop);
+    }
+
+    function stopLoop() {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = 0;
+      if (frameTimer !== null) {
+        clearTimeout(frameTimer);
+        frameTimer = null;
+      }
+    }
+
+    function onVisibilityChange() {
+      if (document.hidden) stopLoop();
+      else startLoop();
+    }
+
+    function loop(ts) {
+      rafId = 0;
       if (!W || !H) resize();
       if (drag && ts - lastDragSentAt > 1200) sendDragEvent(true);
       tickClocks();
@@ -2200,6 +2275,7 @@
         lastHeartbeatAt = ts;
         host.broadcastState(makeSnapshot());
       }
+      scheduleNextFrame(ts);
     }
 
     return {
@@ -2227,10 +2303,12 @@
           canvas.addEventListener("wheel", onWheel, { passive: false });
         }
         window.addEventListener("keydown", onKeyDown);
-        rafId = requestAnimationFrame(loop);
+        document.addEventListener("visibilitychange", onVisibilityChange);
+        startLoop();
       },
       destroy() {
-        cancelAnimationFrame(rafId);
+        stopLoop();
+        document.removeEventListener("visibilitychange", onVisibilityChange);
         window.removeEventListener("resize", resize);
         if (window.PointerEvent) {
           canvas.removeEventListener("pointerdown", onPointerDown);
