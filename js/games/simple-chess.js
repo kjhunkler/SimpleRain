@@ -1,6 +1,7 @@
 /* SimpleChess.
- * Phase 3: detailed vector piece sets with snappy pickup/placement on the
- * pond-styled camera board. Rules, seats, and turn order arrive in later phases.
+ * Phase 5: full chess rules on the pond board — legal move generation with
+ * check, castling, en passant, and promotion; host-validated turn taking on
+ * top of the seat claims and live drag sharing from earlier phases.
  */
 (function () {
   "use strict";
@@ -46,6 +47,251 @@
 
   function isWhitePiece(letter) { return letter === letter.toUpperCase(); }
   function squareName(idx) { return FILES[idx % 8] + String(8 - Math.floor(idx / 8)); }
+
+  // ---- rules engine -------------------------------------------------------
+  // Moves are objects: { from, to, promo?, castle?: "k"|"q", ep?: true, double?: true }.
+
+  const PROMO_LETTERS = ["q", "r", "n", "b"];
+  const KNIGHT_STEPS = [[1, 2], [2, 1], [2, -1], [1, -2], [-1, -2], [-2, -1], [-2, 1], [-1, 2]];
+  const KING_STEPS = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+  const BISHOP_DIRS = [[1, 1], [1, -1], [-1, 1], [-1, -1]];
+  const ROOK_DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+  function pieceColor(letter) { return isWhitePiece(letter) ? "w" : "b"; }
+
+  function pushSlides(board, from, color, dirs, out) {
+    const col = from % 8;
+    const row = Math.floor(from / 8);
+    for (const [dc, dr] of dirs) {
+      let c = col + dc, r = row + dr;
+      while (c >= 0 && c < 8 && r >= 0 && r < 8) {
+        const idx = r * 8 + c;
+        const target = board[idx];
+        if (!target) out.push({ from, to: idx });
+        else {
+          if (pieceColor(target) !== color) out.push({ from, to: idx });
+          break;
+        }
+        c += dc;
+        r += dr;
+      }
+    }
+  }
+
+  function pawnMoves(board, from, color, ep, out) {
+    const col = from % 8;
+    const row = Math.floor(from / 8);
+    const dir = color === "w" ? -1 : 1;
+    const startRow = color === "w" ? 6 : 1;
+    const lastRow = color === "w" ? 0 : 7;
+    const addPawn = (to, extra) => {
+      if (Math.floor(to / 8) === lastRow) {
+        for (const promo of PROMO_LETTERS) out.push({ from, to, promo, ...extra });
+      } else out.push({ from, to, ...extra });
+    };
+    const r1 = row + dir;
+    if (r1 >= 0 && r1 < 8 && !board[r1 * 8 + col]) {
+      addPawn(r1 * 8 + col);
+      const r2 = row + dir * 2;
+      if (row === startRow && !board[r2 * 8 + col]) out.push({ from, to: r2 * 8 + col, double: true });
+    }
+    for (const dc of [-1, 1]) {
+      const c = col + dc;
+      if (c < 0 || c > 7 || r1 < 0 || r1 > 7) continue;
+      const idx = r1 * 8 + c;
+      if (board[idx] && pieceColor(board[idx]) !== color) addPawn(idx, {});
+      else if (idx === ep && !board[idx]) out.push({ from, to: idx, ep: true });
+    }
+  }
+
+  function pseudoMoves(board, from, castling, ep) {
+    const letter = board[from];
+    if (!letter) return [];
+    const color = pieceColor(letter);
+    const type = letter.toLowerCase();
+    const out = [];
+    const col = from % 8;
+    const row = Math.floor(from / 8);
+    if (type === "p") pawnMoves(board, from, color, ep, out);
+    else if (type === "n" || type === "k") {
+      for (const [dc, dr] of type === "n" ? KNIGHT_STEPS : KING_STEPS) {
+        const c = col + dc, r = row + dr;
+        if (c < 0 || c > 7 || r < 0 || r > 7) continue;
+        const idx = r * 8 + c;
+        if (!board[idx] || pieceColor(board[idx]) !== color) out.push({ from, to: idx });
+      }
+      if (type === "k") {
+        const home = color === "w" ? 60 : 4;
+        const rights = castling || {};
+        const kSide = color === "w" ? rights.K : rights.k;
+        const qSide = color === "w" ? rights.Q : rights.q;
+        if (from === home) {
+          const rookK = board[home + 3];
+          if (kSide && !board[home + 1] && !board[home + 2] && rookK && rookK.toLowerCase() === "r" && pieceColor(rookK) === color) {
+            out.push({ from, to: home + 2, castle: "k" });
+          }
+          const rookQ = board[home - 4];
+          if (qSide && !board[home - 1] && !board[home - 2] && !board[home - 3] && rookQ && rookQ.toLowerCase() === "r" && pieceColor(rookQ) === color) {
+            out.push({ from, to: home - 2, castle: "q" });
+          }
+        }
+      }
+    } else if (type === "b") pushSlides(board, from, color, BISHOP_DIRS, out);
+    else if (type === "r") pushSlides(board, from, color, ROOK_DIRS, out);
+    else if (type === "q") pushSlides(board, from, color, [...BISHOP_DIRS, ...ROOK_DIRS], out);
+    return out;
+  }
+
+  function squareAttacked(board, byColor, idx) {
+    const col = idx % 8;
+    const row = Math.floor(idx / 8);
+    const pdir = byColor === "w" ? 1 : -1;
+    for (const dc of [-1, 1]) {
+      const c = col + dc, r = row + pdir;
+      if (c < 0 || c > 7 || r < 0 || r > 7) continue;
+      const p = board[r * 8 + c];
+      if (p && p.toLowerCase() === "p" && pieceColor(p) === byColor) return true;
+    }
+    for (const [dc, dr] of KNIGHT_STEPS) {
+      const c = col + dc, r = row + dr;
+      if (c < 0 || c > 7 || r < 0 || r > 7) continue;
+      const p = board[r * 8 + c];
+      if (p && p.toLowerCase() === "n" && pieceColor(p) === byColor) return true;
+    }
+    for (const [dc, dr] of KING_STEPS) {
+      const c = col + dc, r = row + dr;
+      if (c < 0 || c > 7 || r < 0 || r > 7) continue;
+      const p = board[r * 8 + c];
+      if (p && p.toLowerCase() === "k" && pieceColor(p) === byColor) return true;
+    }
+    for (const [dirs, matches] of [[BISHOP_DIRS, "bq"], [ROOK_DIRS, "rq"]]) {
+      for (const [dc, dr] of dirs) {
+        let c = col + dc, r = row + dr;
+        while (c >= 0 && c < 8 && r >= 0 && r < 8) {
+          const p = board[r * 8 + c];
+          if (p) {
+            if (pieceColor(p) === byColor && matches.includes(p.toLowerCase())) return true;
+            break;
+          }
+          c += dc;
+          r += dr;
+        }
+      }
+    }
+    return false;
+  }
+
+  function findKing(board, color) {
+    const target = color === "w" ? "K" : "k";
+    for (let i = 0; i < 64; i++) if (board[i] === target) return i;
+    return -1;
+  }
+
+  function inCheck(board, color) {
+    const kingIdx = findKing(board, color);
+    return kingIdx >= 0 && squareAttacked(board, color === "w" ? "b" : "w", kingIdx);
+  }
+
+  function execMove(board, move) {
+    const letter = board[move.from];
+    const color = pieceColor(letter);
+    let captured = board[move.to] || "";
+    board[move.to] = move.promo ? (color === "w" ? move.promo.toUpperCase() : move.promo) : letter;
+    board[move.from] = "";
+    if (move.ep) {
+      const capIdx = move.to + (color === "w" ? 8 : -8);
+      captured = board[capIdx];
+      board[capIdx] = "";
+    }
+    if (move.castle) {
+      const home = color === "w" ? 60 : 4;
+      if (move.castle === "k") { board[home + 1] = board[home + 3]; board[home + 3] = ""; }
+      else { board[home - 1] = board[home - 4]; board[home - 4] = ""; }
+    }
+    return captured;
+  }
+
+  function legalMovesFrom(st, from) {
+    const board = st.board;
+    const letter = board[from];
+    if (!letter) return [];
+    const color = pieceColor(letter);
+    const out = [];
+    for (const move of pseudoMoves(board, from, st.castling, st.ep)) {
+      if (move.castle) {
+        if (inCheck(board, color)) continue;
+        const mid = from + (move.castle === "k" ? 1 : -1);
+        const test0 = board.slice();
+        test0[mid] = letter;
+        test0[from] = "";
+        if (inCheck(test0, color)) continue;
+      }
+      const test = board.slice();
+      execMove(test, move);
+      if (!inCheck(test, color)) out.push(move);
+    }
+    return out;
+  }
+
+  function sideHasLegalMove(st, color) {
+    for (let i = 0; i < 64; i++) {
+      const letter = st.board[i];
+      if (!letter || pieceColor(letter) !== color) continue;
+      if (legalMovesFrom(st, i).length) return true;
+    }
+    return false;
+  }
+
+  function insufficientMaterial(board) {
+    const extras = [];
+    for (const letter of board) {
+      if (!letter || letter.toLowerCase() === "k") continue;
+      extras.push(letter.toLowerCase());
+      if (extras.length > 1) return false;
+    }
+    return extras.length === 0 || extras[0] === "b" || extras[0] === "n";
+  }
+
+  function applyMoveFull(st, move) {
+    const letter = st.board[move.from];
+    const color = pieceColor(letter);
+    const captured = execMove(st.board, move);
+    const c = st.castling;
+    if (letter === "K") { c.K = false; c.Q = false; }
+    else if (letter === "k") { c.k = false; c.q = false; }
+    if (move.from === 63 || move.to === 63) c.K = false;
+    if (move.from === 56 || move.to === 56) c.Q = false;
+    if (move.from === 7 || move.to === 7) c.k = false;
+    if (move.from === 0 || move.to === 0) c.q = false;
+    st.ep = move.double ? move.from + (color === "w" ? -8 : 8) : -1;
+    st.halfmove = letter.toLowerCase() === "p" || captured ? 0 : (st.halfmove || 0) + 1;
+    if (color === "b") st.fullmove = (st.fullmove || 1) + 1;
+    st.turn = color === "w" ? "b" : "w";
+    st.rev = (st.rev || 0) + 1;
+    const check = inCheck(st.board, st.turn);
+    const hasMove = sideHasLegalMove(st, st.turn);
+    let result = null;
+    if (!hasMove) result = check ? (color === "w" ? "white" : "black") : "draw";
+    else if ((st.halfmove || 0) >= 100 || insufficientMaterial(st.board)) result = "draw";
+    st.over = !!result;
+    st.result = result;
+    return { letter, color, captured, check, mate: check && !hasMove, stalemate: !check && !hasMove, result };
+  }
+
+  function moveMessage(move, info) {
+    const colorName = info.color === "w" ? "White" : "Black";
+    const piece = PIECE_NAMES[info.letter.toLowerCase()] || "piece";
+    let text;
+    if (move.castle) text = `${colorName} castles ${move.castle === "k" ? "kingside" : "queenside"}.`;
+    else if (move.promo) text = `${colorName} pawn blossoms into a ${PIECE_NAMES[move.promo]} on ${squareName(move.to)}.`;
+    else if (info.captured) text = `${colorName} ${piece} takes on ${squareName(move.to)}.`;
+    else text = `${colorName} ${piece} glides to ${squareName(move.to)}.`;
+    if (info.mate) text += ` Checkmate — ${colorName} wins!`;
+    else if (info.stalemate) text += " Stalemate — the pond stills to a draw.";
+    else if (info.result === "draw") text += " A quiet draw settles over the pond.";
+    else if (info.check) text += " Check!";
+    return text;
+  }
 
   // ---- piece sprites ------------------------------------------------------
   // Pieces are drawn once per letter into an offscreen canvas (100x122 unit
@@ -327,6 +573,8 @@
     let lastDragSentAt = 0;
     let remoteSettles = [];
     let recentRemoteDrops = [];
+    let promoPick = null;
+    let checkIdx = -1;
     const remoteDrags = new Map();
     let state = defaultState();
     const view = { zoom: 1, rot: 0, panX: 0, panY: 0 };
@@ -341,18 +589,32 @@
         createdAt: Date.now(),
         board: startingBoard(),
         seats: { white: null, black: null },
+        turn: "w",
+        castling: { K: true, Q: true, k: true, q: true },
+        ep: -1,
+        halfmove: 0,
+        fullmove: 1,
+        over: false,
+        result: null,
         message: "The pond settles into sixty-four squares.",
       };
     }
 
     function resetHostState() {
       const rev = (state.rev || 0) + 1;
+      const keepSeats = state.seats ? { ...state.seats } : { white: null, black: null };
       state = defaultState();
       state.rev = rev;
+      state.seats = keepSeats;
+      glides = [];
+      sinks = [];
+      remoteSettles = [];
+      promoPick = null;
+      refreshCheck();
     }
 
     function makeSnapshot() {
-      return { ...state, board: state.board.slice(), full: true };
+      return { ...state, board: state.board.slice(), seats: { ...seats() }, castling: { ...state.castling }, full: true };
     }
 
     function applySnapshot(snapshot) {
@@ -366,7 +628,17 @@
         white: typeof rawSeats.white === "string" ? rawSeats.white : null,
         black: typeof rawSeats.black === "string" ? rawSeats.black : null,
       };
+      state.turn = state.turn === "b" ? "b" : "w";
+      const rc = state.castling && typeof state.castling === "object" ? state.castling : {};
+      state.castling = { K: rc.K !== false, Q: rc.Q !== false, k: rc.k !== false, q: rc.q !== false };
+      state.ep = Number.isInteger(state.ep) && state.ep >= 0 && state.ep < 64 ? state.ep : -1;
+      state.halfmove = Number.isInteger(state.halfmove) && state.halfmove >= 0 ? state.halfmove : 0;
+      state.fullmove = Number.isInteger(state.fullmove) && state.fullmove >= 1 ? state.fullmove : 1;
+      state.over = !!state.over;
+      state.result = ["white", "black", "draw"].includes(state.result) ? state.result : null;
+      if (promoPick && (state.over || state.turn !== promoPick.color || state.board[promoPick.from] !== (promoPick.color === "w" ? "P" : "p"))) promoPick = null;
       if (before) spawnMoveAnimations(before, state.board);
+      refreshCheck();
     }
 
     function spawnMoveAnimations(before, after) {
@@ -380,19 +652,28 @@
       }
       if (!appeared.length) return;
       if (appeared.length > 6) { glides = []; sinks = []; return; }
-      let sound = null;
+      let moved = false;
+      let capturedAny = false;
       for (const to of appeared) {
         const letter = after[to];
-        const fromPos = vacated.findIndex((idx) => before[idx] === letter);
+        let fromPos = vacated.findIndex((idx) => before[idx] === letter);
+        if (fromPos < 0) fromPos = vacated.findIndex((idx) => before[idx] && pieceColor(before[idx]) === pieceColor(letter));
         if (fromPos < 0) continue;
         const from = vacated.splice(fromPos, 1)[0];
-        const captured = before[to];
-        if (captured) sinks.push({ letter: captured, idx: to, start: now(), dur: 260 });
+        if (before[to]) {
+          sinks.push({ letter: before[to], idx: to, start: now(), dur: 260 });
+          capturedAny = true;
+        }
         if (!consumeRemoteDrop(from, to)) glides.push({ letter, from, to, start: now(), dur: 200 });
-        sound = captured ? "capture" : (sound || "place");
+        moved = true;
         if (glides.length >= 6) break;
       }
-      if (sound) playSound(sound, 0.55);
+      for (const idx of vacated) {
+        if (!before[idx]) continue;
+        sinks.push({ letter: before[idx], idx, start: now(), dur: 260 });
+        capturedAny = true;
+      }
+      if (moved) playSound(capturedAny ? "capture" : "place", 0.55);
     }
 
     function handleAction(id, input) {
@@ -402,20 +683,62 @@
       else if (input.type === "move") {
         const from = input.from | 0;
         const to = input.to | 0;
+        const promo = typeof input.promo === "string" && PROMO_LETTERS.includes(input.promo) ? input.promo : null;
         const letter = state.board[from];
-        if (!letter || !canMovePiece(id, letter)) {
+        const move = letter ? findLegalMove(id, from, to, promo) : null;
+        if (!move) {
           host.broadcastState(makeSnapshot());
           return;
         }
         const captured = state.board[to];
-        applyMove(from, to);
-        if (id !== myId && state.board[to] === letter) {
-          if (captured) sinks.push({ letter: captured, idx: to, start: now(), dur: 260 });
-          if (!consumeRemoteDrop(from, to)) glides.push({ letter, from, to, start: now(), dur: 200 });
-          playSound(captured ? "capture" : "place", 0.55);
+        const info = applyMoveFull(state, move);
+        state.message = moveMessage(move, info);
+        refreshCheck();
+        if (id !== myId) {
+          if (info.captured) {
+            const sinkIdx = move.ep ? move.to + (info.color === "w" ? 8 : -8) : to;
+            sinks.push({ letter: info.captured, idx: sinkIdx, start: now(), dur: 260 });
+          }
+          if (!consumeRemoteDrop(from, to)) glides.push({ letter: state.board[to], from, to, start: now(), dur: 200 });
+          if (move.castle) {
+            const home = info.color === "w" ? 60 : 4;
+            const rFrom = move.castle === "k" ? home + 3 : home - 4;
+            const rTo = move.castle === "k" ? home + 1 : home - 1;
+            glides.push({ letter: state.board[rTo], from: rFrom, to: rTo, start: now(), dur: 200 });
+          }
+          playSound(info.captured || captured ? "capture" : "place", 0.55);
+        } else {
+          if (move.castle) {
+            const home = info.color === "w" ? 60 : 4;
+            const rFrom = move.castle === "k" ? home + 3 : home - 4;
+            const rTo = move.castle === "k" ? home + 1 : home - 1;
+            glides.push({ letter: state.board[rTo], from: rFrom, to: rTo, start: now(), dur: 200 });
+          }
+          if (move.ep && info.captured) {
+            sinks.push({ letter: info.captured, idx: move.to + (info.color === "w" ? 8 : -8), start: now(), dur: 260 });
+          }
         }
       }
       host.broadcastState(makeSnapshot());
+    }
+
+    function findLegalMove(id, from, to, promo) {
+      const letter = state.board[from];
+      if (!letter || state.over) return null;
+      if (!canMovePiece(id, letter)) return null;
+      if (pieceColor(letter) !== state.turn) return null;
+      const moves = legalMovesFrom(state, from).filter((m) => m.to === to);
+      if (!moves.length) return null;
+      if (moves[0].promo) return moves.find((m) => m.promo === (promo || "q")) || moves[0];
+      return moves[0];
+    }
+
+    function refreshCheck() {
+      checkIdx = !state.over && inCheck(state.board, state.turn) ? findKing(state.board, state.turn) : -1;
+      if (state.over && state.result) {
+        const kIdx = state.result === "draw" ? -1 : findKing(state.board, state.result === "white" ? "b" : "w");
+        checkIdx = kIdx;
+      }
     }
 
     function seats() {
@@ -431,6 +754,22 @@
     function canMovePiece(id, letter) {
       const seat = isWhitePiece(letter) ? seats().white : seats().black;
       return !seat || seat === id;
+    }
+
+    function pickupBlockReason(letter) {
+      if (state.over) {
+        return state.result === "draw"
+          ? "The game ended in a draw. Tap reset to play again."
+          : `Checkmate — ${state.result} won. Tap reset to play again.`;
+      }
+      if (!canMovePiece(myId, letter)) {
+        const owner = isWhitePiece(letter) ? seats().white : seats().black;
+        return `${playerName(owner)} holds the ${isWhitePiece(letter) ? "white" : "black"} pieces.`;
+      }
+      if (pieceColor(letter) !== state.turn) {
+        return `${state.turn === "w" ? "White" : "Black"} to move — wait for your turn.`;
+      }
+      return null;
     }
 
     function claimSeat(id, seat) {
@@ -486,26 +825,28 @@
       }
     }
 
-    function applyMove(from, to) {
-      if (from < 0 || from > 63 || to < 0 || to > 63 || from === to) return;
-      const letter = state.board[from];
-      if (!letter) return;
-      const captured = state.board[to];
-      state.board[to] = letter;
-      state.board[from] = "";
-      state.rev = (state.rev || 0) + 1;
-      const color = isWhitePiece(letter) ? "White" : "Black";
-      state.message = captured
-        ? `${color} ${PIECE_NAMES[letter.toLowerCase()]} takes on ${squareName(to)}.`
-        : `${color} ${PIECE_NAMES[letter.toLowerCase()]} glides to ${squareName(to)}.`;
+    function applyLocalMove(move) {
+      const info = applyMoveFull(state, move);
+      state.message = moveMessage(move, info);
+      refreshCheck();
+      if (move.castle) {
+        const home = info.color === "w" ? 60 : 4;
+        const rFrom = move.castle === "k" ? home + 3 : home - 4;
+        const rTo = move.castle === "k" ? home + 1 : home - 1;
+        glides.push({ letter: state.board[rTo], from: rFrom, to: rTo, start: now(), dur: 200 });
+      }
+      if (move.ep && info.captured) {
+        sinks.push({ letter: info.captured, idx: move.to + (info.color === "w" ? 8 : -8), start: now(), dur: 260 });
+      }
+      return info;
     }
 
-    function sendMove(from, to) {
+    function sendMove(move) {
       if (isHost()) {
-        handleAction(myId, { type: "move", from, to });
+        handleAction(myId, { type: "move", from: move.from, to: move.to, promo: move.promo || null });
       } else {
-        applyMove(from, to);
-        host.sendInput({ type: "move", from, to });
+        applyLocalMove(move);
+        host.sendInput({ type: "move", from: move.from, to: move.to, promo: move.promo || null });
       }
     }
 
@@ -706,19 +1047,21 @@
       const p = pointerPoint(e);
       const pointerId = e.pointerId ?? "mouse";
       e.preventDefault();
+      if (promoPick) { promoTapAt(p.x, p.y); return; }
       if (!activePointers.size && seatTapAt(p.x, p.y)) return;
       const b = screenToBoard(p.x, p.y);
       const idx = squareIndexAt(b.x, b.y);
       const letter = idx >= 0 ? state.board[idx] : "";
       if (letter && !activePointers.size && !dropAnim) {
-        if (!canMovePiece(myId, letter)) {
-          const owner = isWhitePiece(letter) ? seats().white : seats().black;
-          notice(`${playerName(owner)} holds the ${isWhitePiece(letter) ? "white" : "black"} pieces.`);
+        const blocked = pickupBlockReason(letter);
+        if (blocked) {
+          notice(blocked);
           addRipple(b.x, b.y);
         } else {
           if (e.pointerId !== undefined) canvas.setPointerCapture?.(e.pointerId);
           const touch = (e.pointerType || (e.touches ? "touch" : "mouse")) === "touch";
-          drag = { pointerId, letter, from: idx, bx: b.x, by: b.y, start: now(), lift: touch ? 0.52 : 0.14 };
+          const legal = legalMovesFrom(state, idx);
+          drag = { pointerId, letter, from: idx, bx: b.x, by: b.y, start: now(), lift: touch ? 0.52 : 0.14, legal, targets: new Set(legal.map((m) => m.to)) };
           addRipple(b.x, b.y);
           playSound("pickup");
           sendDragEvent(true);
@@ -804,15 +1147,57 @@
       const dropX = held.bx;
       const dropY = held.by - lift;
       const target = commit ? squareIndexAt(dropX, dropY) : -1;
-      const canMove = target >= 0 && target !== held.from && !!state.board[held.from];
-      const to = canMove ? target : held.from;
-      const captured = canMove ? state.board[to] : "";
+      const stillMine = state.board[held.from] === held.letter && !state.over
+        && pieceColor(held.letter) === state.turn && canMovePiece(myId, held.letter);
+      const move = target >= 0 && target !== held.from && stillMine
+        ? legalMovesFrom(state, held.from).find((m) => m.to === target)
+        : null;
+      if (commit && target >= 0 && target !== held.from && !move && !state.over) notice("That square lies beyond this piece's reach.");
+      const to = move ? target : held.from;
+      const captured = move ? state.board[to] : "";
       dropAnim = { letter: held.letter, to, x0: dropX, y0: dropY, start: now(), dur: 150, captured: !!captured };
       host.sendEvent?.({ kind: "drop", to });
-      if (canMove) {
-        if (captured) sinks.push({ letter: captured, idx: to, start: now(), dur: 260 });
-        sendMove(held.from, to);
+      if (!move) return;
+      if (move.promo) {
+        promoPick = { from: held.from, to, color: pieceColor(held.letter) };
+        return;
       }
+      if (captured) {
+        sinks.push({ letter: captured, idx: to, start: now(), dur: 260 });
+      }
+      sendMove(move);
+    }
+
+    // ---- promotion picker ---------------------------------------------------
+
+    function promoRects() {
+      if (!promoPick) return null;
+      const size = Math.min(64, Math.max(48, W * 0.11));
+      const gap = 10;
+      const total = PROMO_LETTERS.length * size + (PROMO_LETTERS.length - 1) * gap;
+      const x = (W - total) / 2;
+      const y = H / 2 - size / 2;
+      return PROMO_LETTERS.map((letter, i) => ({ letter, x: x + i * (size + gap), y, w: size, h: size }));
+    }
+
+    function promoTapAt(x, y) {
+      const rects = promoRects();
+      if (!rects) return;
+      for (const r of rects) {
+        if (pointIn(r, x, y)) {
+          const pick = promoPick;
+          promoPick = null;
+          const move = (legalMovesFrom(state, pick.from) || []).find((m) => m.to === pick.to && m.promo === r.letter);
+          if (move) {
+            const captured = state.board[move.to];
+            if (captured) sinks.push({ letter: captured, idx: move.to, start: now(), dur: 260 });
+            sendMove(move);
+          }
+          return;
+        }
+      }
+      promoPick = null;
+      notice("The pawn waits at the bank — drag it again to promote.");
     }
 
     function onWheel(e) {
@@ -833,6 +1218,7 @@
       else if (e.key === "e" || e.key === "E") { e.preventDefault(); view.rot += Math.PI / 12; }
       else if (e.key === "0") { e.preventDefault(); resetView(); }
       else if (e.key === "Escape" && drag) { e.preventDefault(); finishDrag(false); }
+      else if (e.key === "Escape" && promoPick) { e.preventDefault(); promoPick = null; }
     }
 
     // ---- pond ambiance ----------------------------------------------------
@@ -1014,13 +1400,19 @@
     }
 
     function drawHighlights(ts) {
+      if (checkIdx >= 0) {
+        const pulse = 0.5 + Math.sin(ts * 0.008) * 0.2;
+        drawSquareGlow(checkIdx, `rgba(255, 120, 96, ${pulse.toFixed(3)})`, Math.max(2, cellPx() * 0.07));
+      }
       if (!drag) return;
       const lift = dragLift(ts);
       const idx = squareIndexAt(drag.bx, drag.by - lift);
       drawSquareGlow(drag.from, "rgba(180, 226, 244, 0.5)", Math.max(1.6, cellPx() * 0.045));
       if (idx >= 0 && idx !== drag.from) {
+        const legal = drag.targets?.has(idx);
         const pulse = 0.62 + Math.sin(ts * 0.012) * 0.18;
-        drawSquareGlow(idx, `rgba(140, 232, 188, ${pulse.toFixed(3)})`, Math.max(2, cellPx() * 0.07));
+        const color = legal ? `rgba(140, 232, 188, ${pulse.toFixed(3)})` : `rgba(232, 140, 122, ${(pulse * 0.7).toFixed(3)})`;
+        drawSquareGlow(idx, color, Math.max(2, cellPx() * 0.07));
       }
     }
 
@@ -1070,6 +1462,7 @@
       const skip = new Set();
       if (drag) skip.add(drag.from);
       if (dropAnim) skip.add(dropAnim.to);
+      if (promoPick) skip.add(promoPick.from);
       for (const g of glides) skip.add(g.to);
       for (const r of remoteSettles) {
         skip.add(r.to);
@@ -1082,6 +1475,12 @@
         const c = squareCenter(idx);
         drawPieceShadow(c.x, c.y, s, 1, 0);
         drawPieceSprite(letter, c.x, c.y);
+      }
+      if (promoPick && !dropAnim) {
+        const c = squareCenter(promoPick.to);
+        const pawn = promoPick.color === "w" ? "P" : "p";
+        drawPieceShadow(c.x, c.y, s, 1, 0);
+        drawPieceSprite(pawn, c.x, c.y, 1, 0.85);
       }
     }
 
@@ -1186,6 +1585,33 @@
       drawPieceSprite(drag.letter, drag.bx + wob, drag.by - lift, 1.14);
     }
 
+    function drawPromoPicker() {
+      const rects = promoRects();
+      if (!rects) return;
+      ctx.save();
+      ctx.fillStyle = "rgba(6, 16, 22, 0.55)";
+      ctx.fillRect(0, 0, W, H);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#eaf6ff";
+      ctx.font = "700 15px system-ui, sans-serif";
+      ctx.fillText("Your pawn reaches the far bank — choose its bloom", W / 2, rects[0].y - 30);
+      for (const r of rects) {
+        ctx.fillStyle = "rgba(19, 42, 54, 0.92)";
+        drawRoundRect(r.x, r.y, r.w, r.h, 10);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(140, 232, 188, 0.5)";
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+        const letter = promoPick.color === "w" ? r.letter.toUpperCase() : r.letter;
+        const sprite = pieceSprite(letter);
+        const dw = r.w * 0.72;
+        const dh = dw * (SPRITE_UNIT_H / SPRITE_UNIT_W);
+        ctx.drawImage(sprite, r.x + (r.w - dw) / 2, r.y + r.h - dh * (112 / SPRITE_UNIT_H) - r.h * 0.08, dw, dh);
+      }
+      ctx.restore();
+    }
+
     function seatLabel(id, fallback) {
       if (!id) return fallback;
       if (id === myId) return "You";
@@ -1270,6 +1696,7 @@
       });
       drawVignette();
       drawSeatBar();
+      drawPromoPicker();
       drawBanner(ts);
       if (isHost() && ts - lastHeartbeatAt > SNAPSHOT_HEARTBEAT_MS) {
         lastHeartbeatAt = ts;
