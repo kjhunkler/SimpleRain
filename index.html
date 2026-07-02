@@ -55,10 +55,13 @@
     <section id="screen-play" class="screen">
       <div class="play-menu-bar" aria-label="SimpleRain controls">
         <button id="btn-leave-lobby-top" class="menu-icon-btn leave-top-btn" aria-label="Leave lobby" type="button">←</button>
+        <button id="btn-voice" class="menu-icon-btn voice-btn hidden" aria-label="Join voice chat" aria-pressed="false" type="button">🎙️</button>
+        <button id="btn-chat" class="menu-icon-btn chat-btn hidden" aria-label="Open chat" type="button">💬<span id="chat-unread" class="chat-unread hidden"></span></button>
         <ul id="player-list" class="player-list"></ul>
         <button id="btn-profile" class="player-profile-btn" aria-label="Edit profile" type="button"></button>
       </div>
       <canvas id="stage"></canvas>
+      <div id="chat-toasts" class="chat-toasts" aria-live="polite"></div>
     </section>
   </div>
 
@@ -135,6 +138,20 @@
     </div>
   </div>
 
+  <div id="chat-drawer" class="chat-drawer" aria-hidden="true">
+    <div class="chat-drawer-header">
+      <h2>Lobby Chat</h2>
+      <button id="btn-close-chat" class="close-btn" aria-label="Close chat" type="button">&#10005;</button>
+    </div>
+    <div id="chat-log" class="chat-log" aria-live="polite"></div>
+    <form id="chat-form" class="chat-form" autocomplete="off">
+      <input id="input-chat" class="text-input chat-input" type="text" maxlength="280" placeholder="Say something kind..." aria-label="Chat message" />
+      <button class="btn btn-small chat-send-btn" type="submit">Send</button>
+    </form>
+  </div>
+
+  <div id="voice-audio-sink" class="voice-audio-sink" aria-hidden="true"></div>
+
   <div id="welcome-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
     <div class="modal-card welcome-card">
       <h2 id="welcome-title">Welcome to the pond</h2>
@@ -181,8 +198,8 @@
   </div>
 
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <script src="js/peer-net.js?v=1.3.0"></script>
-  <script src="js/games/simple-rain.js?v=1.3.0"></script>
-  <script src="js/app.js?v=1.3.0"></script>
+  <script src="js/peer-net.js?v=1.4.0"></script>
+  <script src="js/games/simple-rain.js?v=1.4.0"></script>
+  <script src="js/app.js?v=1.4.0"></script>
 </body>
 </html>

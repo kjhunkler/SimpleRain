@@ -1,6 +1,6 @@
 /* SimpleRain app shell: auto host/join, profile editing, host-owned game state. */
 
-const APP_VERSION = "1.3.0";
+const APP_VERSION = "1.4.0";
 const AUTO_CHANNEL = "simple-rain";
 const GAME_SAVE_KEY = "simplerain-host-cache";
 const MUSIC_MUTED_KEY = "simplerain-music-muted";
@@ -22,6 +22,10 @@ const ICONS = ["🐸", "🐢", "🐟", "🦆", "🦋", "🐞", "🐝", "🦗", "
 const POND_ICON_SUGGESTIONS = ["🐸", "🐢", "🐟", "🦆", "🦋", "🐞", "🐝", "🦗", "🦎", "🐌", "🦀", "🐿️", "🦢", "🐠"];
 const INVITE_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const HOST_REQUEST_COOLDOWN_MS = 60000;
+const CHAT_HISTORY_LIMIT = 60;
+const CHAT_MESSAGE_MAX_CHARS = 280;
+const CHAT_TOAST_MS = 5200;
+const CHAT_SEND_COOLDOWN_MS = 600;
 const FLOWER_LOBBIES = [
   { key: "lotus", name: "Lotus", art: "lotus", color: "#f4a6cf" },
   { key: "iris", name: "Iris", art: "iris", color: "#a993ff" },
@@ -66,6 +70,10 @@ let lobbyScanToken = 0;
 let lastLobbyRefreshAttemptAt = 0;
 let pendingInvites = [];
 let lastHostRequestAt = 0;
+let chatHistory = [];
+let chatUnread = 0;
+let lastChatSentAt = 0;
+let chatSeq = 0;
 
 const players = new Map();
 const peerMap = new Map();
@@ -371,6 +379,518 @@ function broadcastPresenceRoster() {
   presenceNet.broadcast(presenceRosterMessage());
 }
 
+/* ===== Lobby text chat =====
+ * Every lobby member mirrors the full history (host-stamped, trimmed to
+ * CHAT_HISTORY_LIMIT). The host relays messages and seeds new joiners, and
+ * because everyone holds the mirror the log survives host migration.
+ */
+function chatMessageId() {
+  return `${MY_ID}-${Date.now().toString(36)}-${(chatSeq++).toString(36)}`;
+}
+
+function trimChatHistory() {
+  if (chatHistory.length > CHAT_HISTORY_LIMIT) chatHistory = chatHistory.slice(-CHAT_HISTORY_LIMIT);
+}
+
+function chatDrawerOpen() {
+  return !!$("#chat-drawer")?.classList.contains("open");
+}
+
+function updateChatUnreadBadge() {
+  const badge = $("#chat-unread");
+  if (!badge) return;
+  badge.classList.toggle("hidden", chatUnread <= 0);
+  badge.textContent = chatUnread > 9 ? "9+" : String(chatUnread);
+}
+
+function chatSenderProfile(message) {
+  return profiles.get(message.fromId) || { name: message.fromName || "Player", color: COLORS[0], icon: "" };
+}
+
+function chatAvatarHtml(message) {
+  const sender = chatSenderProfile(message);
+  return `<span class="swatch" style="background:${esc(sender.color || COLORS[0])}">${esc(displayIcon(sender.icon))}</span>`;
+}
+
+function renderChatLog() {
+  const log = $("#chat-log");
+  if (!log) return;
+  log.innerHTML = "";
+  if (!chatHistory.length) {
+    const empty = document.createElement("p");
+    empty.className = "chat-empty";
+    empty.textContent = "No messages yet. The pond is quiet.";
+    log.appendChild(empty);
+    return;
+  }
+  for (const message of chatHistory) {
+    const line = document.createElement("div");
+    line.className = "chat-line";
+    const time = new Date(message.at || Date.now()).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    line.innerHTML = `
+      ${chatAvatarHtml(message)}
+      <span><span class="chat-line-name">${esc(message.fromName || "Player")}</span>${esc(message.text)}<span class="chat-line-time">${esc(time)}</span></span>
+    `;
+    log.appendChild(line);
+  }
+  log.scrollTop = log.scrollHeight;
+}
+
+function showChatToast(message) {
+  const stack = $("#chat-toasts");
+  if (!stack || chatDrawerOpen()) return;
+  const toast = document.createElement("div");
+  toast.className = "chat-toast";
+  toast.innerHTML = `
+    ${chatAvatarHtml(message)}
+    <span><span class="chat-toast-name">${esc(message.fromName || "Player")}</span>${esc(message.text)}</span>
+  `;
+  stack.appendChild(toast);
+  while (stack.children.length > 4) stack.firstChild.remove();
+  setTimeout(() => {
+    toast.classList.add("fading");
+    setTimeout(() => toast.remove(), 550);
+  }, CHAT_TOAST_MS);
+}
+
+function acceptChatMessage(message, { toast = true } = {}) {
+  if (!message?.id || typeof message.text !== "string") return;
+  if (chatHistory.some((existing) => existing.id === message.id)) return;
+  message.text = message.text.slice(0, CHAT_MESSAGE_MAX_CHARS);
+  chatHistory.push(message);
+  chatHistory.sort((a, b) => (a.at || 0) - (b.at || 0));
+  trimChatHistory();
+  if (toast && message.fromId !== MY_ID) showChatToast(message);
+  if (!chatDrawerOpen() && message.fromId !== MY_ID) {
+    chatUnread++;
+    updateChatUnreadBadge();
+  }
+  if (chatDrawerOpen()) renderChatLog();
+}
+
+function hostStampAndRelayChat(message) {
+  message.at = Date.now();
+  acceptChatMessage(message);
+  net.broadcast({ t: "chat", message });
+}
+
+function sendChatMessage(text) {
+  const trimmed = String(text || "").trim().slice(0, CHAT_MESSAGE_MAX_CHARS);
+  if (!trimmed || soloMode || !inLobby) return;
+  const now = Date.now();
+  if (now - lastChatSentAt < CHAT_SEND_COOLDOWN_MS) return;
+  lastChatSentAt = now;
+  const message = { id: chatMessageId(), fromId: MY_ID, fromName: profile.name, text: trimmed, at: now };
+  if (net.isHost) {
+    hostStampAndRelayChat(message);
+  } else {
+    acceptChatMessage(message);
+    net.send({ t: "chat", message });
+  }
+}
+
+function openChatDrawer() {
+  $("#chat-drawer")?.classList.add("open");
+  chatUnread = 0;
+  updateChatUnreadBadge();
+  renderChatLog();
+  setTimeout(() => $("#input-chat")?.focus?.(), 200);
+}
+
+function closeChatDrawer() {
+  $("#chat-drawer")?.classList.remove("open");
+}
+
+function toggleChatDrawer() {
+  if (chatDrawerOpen()) closeChatDrawer();
+  else openChatDrawer();
+}
+
+function resetChatState() {
+  chatHistory = [];
+  chatUnread = 0;
+  updateChatUnreadBadge();
+  closeChatDrawer();
+  const stack = $("#chat-toasts");
+  if (stack) stack.innerHTML = "";
+}
+
+function updateChatControls() {
+  const showComms = inLobby && !soloMode;
+  $("#btn-chat")?.classList.toggle("hidden", !showComms);
+  $("#btn-voice")?.classList.toggle("hidden", !showComms);
+}
+
+function wireChatControls() {
+  const chatButton = $("#btn-chat");
+  if (chatButton) chatButton.onclick = toggleChatDrawer;
+  const voiceButton = $("#btn-voice");
+  if (voiceButton) voiceButton.onclick = toggleVoice;
+  const close = $("#btn-close-chat");
+  if (close) close.onclick = closeChatDrawer;
+  const form = $("#chat-form");
+  if (form) {
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      const input = $("#input-chat");
+      sendChatMessage(input?.value);
+      if (input) input.value = "";
+    };
+  }
+}
+
+/* ===== Voice chat =====
+ * Opt-in mesh over PeerJS media calls. Participants announce themselves to the
+ * host, which broadcasts the voice roster. Later joiners call earlier members
+ * (joinedAt ordering) so exactly one call exists per pair. Remote streams play
+ * through plain <audio> elements so background tabs keep playing; on refocus
+ * the srcObject is re-attached to drop any buffered backlog instead of
+ * replaying it.
+ */
+const voice = {
+  on: false,
+  pending: false,
+  stream: null,
+  joinedAt: 0,
+  roster: new Map(), // appId -> { id, peerId, joinedAt }
+  calls: new Map(), // appId -> MediaConnection
+  audios: new Map(), // appId -> HTMLAudioElement
+  analysers: new Map(), // appId -> { ctx, analyser, data, source }
+  speaking: new Set(), // appIds currently speaking
+  levelTimer: null,
+  keepAliveTimer: null,
+};
+
+function voiceRosterMessage() {
+  return { t: "voice-roster", entries: [...voice.roster.values()] };
+}
+
+function broadcastVoiceRoster() {
+  if (!net.isHost) return;
+  net.broadcast(voiceRosterMessage());
+  syncVoiceMesh();
+}
+
+function announceVoiceState(active) {
+  const entry = { id: MY_ID, peerId: net.peer?.id || "", joinedAt: voice.joinedAt };
+  if (net.isHost) {
+    if (active) voice.roster.set(MY_ID, entry);
+    else voice.roster.delete(MY_ID);
+    broadcastVoiceRoster();
+  } else {
+    net.send({ t: "voice-state", active, entry });
+  }
+}
+
+async function joinVoice() {
+  if (voice.on || voice.pending || soloMode || !inLobby) return;
+  voice.pending = true;
+  updateVoiceButton();
+  try {
+    voice.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      video: false,
+    });
+  } catch {
+    voice.pending = false;
+    updateVoiceButton();
+    setStatus("Microphone unavailable. Check browser permissions.");
+    return;
+  }
+  voice.pending = false;
+  voice.on = true;
+  voice.joinedAt = Date.now();
+  attachSpeakingAnalyser(MY_ID, voice.stream);
+  announceVoiceState(true);
+  startVoiceLevelLoop();
+  startVoiceKeepAlive();
+  updateVoiceButton();
+  setStatus("Voice chat on.");
+}
+
+function leaveVoice(silent = false) {
+  const wasOn = voice.on || voice.pending;
+  voice.on = false;
+  voice.pending = false;
+  if (voice.stream) {
+    for (const track of voice.stream.getTracks()) { try { track.stop(); } catch {} }
+    voice.stream = null;
+  }
+  for (const call of voice.calls.values()) { try { call.close(); } catch {} }
+  voice.calls.clear();
+  for (const audio of voice.audios.values()) detachVoiceAudio(audio);
+  voice.audios.clear();
+  for (const id of [...voice.analysers.keys()]) detachSpeakingAnalyser(id);
+  voice.speaking.clear();
+  stopVoiceLevelLoop();
+  stopVoiceKeepAlive();
+  if (voiceAnalysisCtx) {
+    voiceAnalysisCtx.close().catch(() => {});
+    voiceAnalysisCtx = null;
+  }
+  renderSpeakingIndicators();
+  if (wasOn && inLobby && !silent) announceVoiceState(false);
+  updateVoiceButton();
+}
+
+function toggleVoice() {
+  if (voice.on || voice.pending) {
+    leaveVoice();
+    setStatus("Voice chat off.");
+  } else {
+    joinVoice();
+  }
+}
+
+function updateVoiceButton() {
+  const button = $("#btn-voice");
+  if (!button) return;
+  button.classList.toggle("voice-on", voice.on);
+  button.classList.toggle("voice-pending", voice.pending);
+  button.setAttribute("aria-pressed", String(voice.on));
+  button.setAttribute("aria-label", voice.on ? "Leave voice chat" : "Join voice chat");
+}
+
+function applyVoiceRoster(entries) {
+  voice.roster = new Map((entries || []).filter((entry) => entry?.id).map((entry) => [entry.id, entry]));
+  rekeyVoicePeers();
+  syncVoiceMesh();
+}
+
+/* If a call was answered before the roster arrived it is keyed by raw PeerJS
+ * id; once the roster maps that peer to an app id, move the entries over so
+ * speaking indicators line up with player pills.
+ */
+function rekeyVoicePeers() {
+  for (const entry of voice.roster.values()) {
+    if (!entry.peerId || entry.peerId === entry.id) continue;
+    for (const map of [voice.calls, voice.audios, voice.analysers]) {
+      if (map.has(entry.peerId) && !map.has(entry.id)) {
+        map.set(entry.id, map.get(entry.peerId));
+        map.delete(entry.peerId);
+      }
+    }
+    if (voice.speaking.has(entry.peerId)) {
+      voice.speaking.delete(entry.peerId);
+      voice.speaking.add(entry.id);
+    }
+  }
+}
+
+/* Later joiners call earlier members so each pair has exactly one call. */
+function syncVoiceMesh() {
+  if (!voice.on || !voice.stream) return;
+  const mine = voice.roster.get(MY_ID);
+  if (!mine) return;
+  for (const entry of voice.roster.values()) {
+    if (entry.id === MY_ID || !entry.peerId) continue;
+    if (voice.calls.has(entry.id)) continue;
+    const iAmLater = (mine.joinedAt || 0) > (entry.joinedAt || 0) || ((mine.joinedAt || 0) === (entry.joinedAt || 0) && MY_ID > entry.id);
+    if (!iAmLater) continue;
+    const call = net.call(entry.peerId, voice.stream);
+    if (call) wireVoiceCall(entry.id, call);
+  }
+  for (const [appId, call] of [...voice.calls]) {
+    if (!voice.roster.has(appId)) {
+      try { call.close(); } catch {}
+      dropVoicePeer(appId);
+    }
+  }
+}
+
+function appIdForPeerId(peerId) {
+  for (const entry of voice.roster.values()) {
+    if (entry.peerId === peerId) return entry.id;
+  }
+  return peerMap.get(peerId) || null;
+}
+
+function wireVoiceCall(appId, call) {
+  voice.calls.set(appId, call);
+  call.on("stream", (remoteStream) => {
+    playVoiceStream(appId, remoteStream);
+    attachSpeakingAnalyser(appId, remoteStream);
+  });
+  call.on("close", () => dropVoicePeer(appId));
+  call.on("error", () => dropVoicePeer(appId));
+}
+
+function answerVoiceCall(call) {
+  if (!voice.on || !voice.stream) {
+    try { call.close(); } catch {}
+    return;
+  }
+  const appId = appIdForPeerId(call.peer) || call.peer;
+  const existing = voice.calls.get(appId);
+  if (existing && existing !== call) { try { existing.close(); } catch {} }
+  try { call.answer(voice.stream); } catch { return; }
+  wireVoiceCall(appId, call);
+}
+
+function dropVoicePeer(appId) {
+  voice.calls.delete(appId);
+  const audio = voice.audios.get(appId);
+  if (audio) detachVoiceAudio(audio);
+  voice.audios.delete(appId);
+  detachSpeakingAnalyser(appId);
+  voice.speaking.delete(appId);
+  renderSpeakingIndicators();
+}
+
+function detachVoiceAudio(audio) {
+  try { audio.pause(); } catch {}
+  audio.srcObject = null;
+  audio.remove();
+}
+
+function playVoiceStream(appId, stream) {
+  const sink = $("#voice-audio-sink");
+  if (!sink) return;
+  let audio = voice.audios.get(appId);
+  if (!audio) {
+    audio = document.createElement("audio");
+    audio.autoplay = true;
+    audio.setAttribute("playsinline", "");
+    sink.appendChild(audio);
+    voice.audios.set(appId, audio);
+  }
+  audio.srcObject = stream;
+  audio.play().catch(() => {});
+}
+
+/* After host migration the Peer object (and every media call) is replaced,
+ * but the local mic stream survives. Clear stale calls and re-announce with
+ * the fresh peer id so the mesh rebuilds.
+ */
+function restoreVoiceAfterReconnect() {
+  if (!voice.on || !voice.stream) return;
+  for (const call of voice.calls.values()) { try { call.close(); } catch {} }
+  voice.calls.clear();
+  for (const [appId, audio] of voice.audios) {
+    detachVoiceAudio(audio);
+    detachSpeakingAnalyser(appId);
+  }
+  voice.audios.clear();
+  voice.speaking.clear();
+  attachSpeakingAnalyser(MY_ID, voice.stream);
+  if (net.isHost) voice.roster = new Map([[MY_ID, { id: MY_ID, peerId: net.peer?.id || "", joinedAt: voice.joinedAt }]]);
+  announceVoiceState(true);
+  renderSpeakingIndicators();
+}
+
+/* ===== Speaking detection ===== */
+const VOICE_SPEAKING_THRESHOLD = 0.045;
+const VOICE_SPEAKING_HOLD_MS = 450;
+const VOICE_LEVEL_INTERVAL_MS = 160;
+let voiceAnalysisCtx = null;
+
+function voiceAnalysisContext() {
+  if (!voiceAnalysisCtx || voiceAnalysisCtx.state === "closed") {
+    voiceAnalysisCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (voiceAnalysisCtx.state === "suspended") voiceAnalysisCtx.resume().catch(() => {});
+  return voiceAnalysisCtx;
+}
+
+function attachSpeakingAnalyser(appId, stream) {
+  detachSpeakingAnalyser(appId);
+  try {
+    const ctx = voiceAnalysisContext();
+    const source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser);
+    voice.analysers.set(appId, { analyser, source, data: new Uint8Array(analyser.fftSize), lastLoudAt: 0 });
+  } catch {}
+}
+
+function detachSpeakingAnalyser(appId) {
+  const entry = voice.analysers.get(appId);
+  if (!entry) return;
+  try { entry.source.disconnect(); } catch {}
+  voice.analysers.delete(appId);
+  voice.speaking.delete(appId);
+}
+
+function startVoiceLevelLoop() {
+  stopVoiceLevelLoop();
+  voice.levelTimer = setInterval(() => {
+    const now = Date.now();
+    let changed = false;
+    for (const [appId, entry] of voice.analysers) {
+      entry.analyser.getByteTimeDomainData(entry.data);
+      let sum = 0;
+      for (let i = 0; i < entry.data.length; i++) {
+        const v = (entry.data[i] - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / entry.data.length);
+      if (rms > VOICE_SPEAKING_THRESHOLD) entry.lastLoudAt = now;
+      const speaking = now - entry.lastLoudAt < VOICE_SPEAKING_HOLD_MS;
+      if (speaking !== voice.speaking.has(appId)) {
+        if (speaking) voice.speaking.add(appId);
+        else voice.speaking.delete(appId);
+        changed = true;
+      }
+    }
+    if (changed) renderSpeakingIndicators();
+  }, VOICE_LEVEL_INTERVAL_MS);
+}
+
+function stopVoiceLevelLoop() {
+  clearInterval(voice.levelTimer);
+  voice.levelTimer = null;
+}
+
+function renderSpeakingIndicators() {
+  document.querySelectorAll(".swatch[data-pid]").forEach((el) => {
+    el.classList.toggle("speaking", voice.speaking.has(el.dataset.pid));
+  });
+}
+
+/* ===== Background-tab voice continuity =====
+ * Remote audio plays through <audio> elements, which browsers keep running in
+ * hidden tabs (unlike AudioContext, which throttles and then dumps the backlog
+ * on refocus — the annoying "catch up" effect). While hidden, a watchdog
+ * revives any element the browser paused. On refocus, re-attaching srcObject
+ * discards whatever buffered backlog remains so playback resumes live instead
+ * of replaying missed audio.
+ */
+const VOICE_KEEPALIVE_MS = 2000;
+
+function startVoiceKeepAlive() {
+  stopVoiceKeepAlive();
+  voice.keepAliveTimer = setInterval(() => {
+    if (!voice.on) return;
+    for (const audio of voice.audios.values()) {
+      if (audio.paused && audio.srcObject) audio.play().catch(() => {});
+    }
+  }, VOICE_KEEPALIVE_MS);
+}
+
+function stopVoiceKeepAlive() {
+  clearInterval(voice.keepAliveTimer);
+  voice.keepAliveTimer = null;
+}
+
+function flushVoiceBacklog() {
+  if (!voice.on) return;
+  for (const audio of voice.audios.values()) {
+    const stream = audio.srcObject;
+    if (!stream) continue;
+    audio.srcObject = null;
+    audio.srcObject = stream;
+    audio.play().catch(() => {});
+  }
+  if (voiceAnalysisCtx?.state === "suspended") voiceAnalysisCtx.resume().catch(() => {});
+}
+
+function wireVoiceVisibility() {
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) flushVoiceBacklog();
+  });
+}
+
 function inviteLobbyChannel() {
   if (inLobby && sessionChannel) return sessionChannel;
   const input = $("#input-home-lobby-code");
@@ -595,7 +1115,8 @@ function currentPlayer() {
 
 function playerPillHtml(player, hostId) {
   const crown = player.id === hostId ? `<span class="host-crown" aria-hidden="true">♛</span>` : "";
-  return `<span class="swatch" style="background:${player.color}">${crown}${esc(displayIcon(player.icon))}</span>${esc(player.name)}`;
+  const speaking = voice.speaking.has(player.id) ? " speaking" : "";
+  return `<span class="swatch${speaking}" data-pid="${esc(player.id)}" style="background:${player.color}">${crown}${esc(displayIcon(player.icon))}</span>${esc(player.name)}`;
 }
 
 function renderPlayers() {
@@ -667,7 +1188,7 @@ function gameHostApi() {
     isHost: () => soloMode || net.isHost,
     getPlayers: () => getVisiblePlayers(),
     getProfile: (id) => profiles.get(id),
-    isSpeaking: () => false,
+    isSpeaking: (id) => voice.speaking.has(id ?? MY_ID),
     isMusicMuted: () => selectedMusicTrackIds.length === 0,
     getSelectedMusicTracks: () => selectedMusicTrackIds.slice(),
     sendInput: (input) => {
@@ -765,6 +1286,7 @@ function updateLobbyControls() {
   const homeCode = $("#input-home-lobby-code");
   if (homeCode && !homeCode.value && sessionChannel) homeCode.value = sessionChannel;
   updateHostControlButtons();
+  updateChatControls();
 }
 
 function lobbyInfoPayload() {
@@ -1014,6 +1536,7 @@ function wireManageControls() {
   const reset = $("#btn-reset");
   if (reset) reset.onclick = resetGame;
   wireMusicPicker();
+  wireChatControls();
   const leave = $("#btn-leave-lobby");
   if (leave) leave.onclick = leaveLobby;
   const leaveTop = $("#btn-leave-lobby-top");
@@ -1105,6 +1628,9 @@ function startLocalGame(initialState, fresh, status) {
   stopHostWatchdog();
   clearHandoffTimer();
   clearClientWelcomeTimer();
+  resetChatState();
+  leaveVoice(true);
+  voice.roster.clear();
   net.destroy();
   soloMode = true;
   inLobby = false;
@@ -1135,6 +1661,9 @@ function leaveLobby() {
   stopHostWatchdog();
   clearHandoffTimer();
   clearClientWelcomeTimer();
+  resetChatState();
+  leaveVoice(true);
+  voice.roster.clear();
   players.clear();
   peerMap.clear();
   usedColors.clear();
@@ -1158,7 +1687,9 @@ function leaveLobby() {
 }
 
 function connectToLobby(channel, preferHost = false, openInviteWhenReady = false) {
-  sessionChannel = normalizeLobbyChannel(channel);
+  const nextChannel = normalizeLobbyChannel(channel);
+  if (nextChannel !== sessionChannel) resetChatState();
+  sessionChannel = nextChannel;
   soloMode = false;
   hostReachability = "unconfirmed";
   inLobby = true;
@@ -1509,6 +2040,7 @@ function wireNetEvents() {
     show("play");
     updateInvitePanel();
     updateLobbyControls();
+    restoreVoiceAfterReconnect();
     if (showInviteAfterReady) {
       showInviteAfterReady = false;
       openProfileSheet();
@@ -1528,6 +2060,7 @@ function wireNetEvents() {
     startClientWelcomeTimer();
     updateInvitePanel();
     updateLobbyControls();
+    restoreVoiceAfterReconnect();
     broadcastPresence(true);
   });
 
@@ -1544,6 +2077,11 @@ function wireNetEvents() {
     if (player) usedColors.delete(player.color);
     if (id) players.delete(id);
     peerMap.delete(peerId);
+    if (id && voice.roster.has(id)) {
+      voice.roster.delete(id);
+      dropVoicePeer(id);
+      broadcastVoiceRoster();
+    }
     activeGame?.onPlayerList?.();
     const state = snapshotGame();
     if (state) {
@@ -1565,6 +2103,13 @@ function wireNetEvents() {
     else handleClientMessage(data);
   });
 
+  net.on("media-call", (call) => answerVoiceCall(call));
+
+  net.on("media-close", (peerId) => {
+    const appId = appIdForPeerId(peerId);
+    if (appId) dropVoicePeer(appId);
+  });
+
   net.on("error", (err) => {
     console.error(err);
     if (soloMode) return;
@@ -1580,10 +2125,21 @@ function handleHostMessage(peerId, msg) {
     setHostReachability("confirmed");
     net.sendTo(peerId, { t: "welcome", color: player.color });
     net.sendTo(peerId, { t: "players", players: [...players.values()], hostOrder: [...players.keys()] });
+    if (chatHistory.length) net.sendTo(peerId, { t: "chat-history", messages: chatHistory });
     queueStateForPeer(peerId);
     activeGame?.onPlayerList?.();
     broadcastPlayers(true);
     renderPlayers();
+  } else if (msg.t === "chat") {
+    const id = peerMap.get(peerId);
+    if (!id || !msg.message || msg.message.fromId !== id) return;
+    hostStampAndRelayChat(msg.message);
+  } else if (msg.t === "voice-state") {
+    const id = peerMap.get(peerId);
+    if (!id || !msg.entry || msg.entry.id !== id) return;
+    if (msg.active) voice.roster.set(id, { ...msg.entry, peerId });
+    else voice.roster.delete(id);
+    broadcastVoiceRoster();
   } else if (msg.t === "game-input") {
     const id = peerMap.get(peerId);
     if (id) handleGameInput(id, msg.input);
@@ -1657,6 +2213,13 @@ function handleClientMessage(msg) {
     renderPlayers();
   } else if (msg.t === "game-state") {
     handleGameState(msg.state);
+  } else if (msg.t === "chat") {
+    if (msg.message) acceptChatMessage(msg.message);
+  } else if (msg.t === "chat-history") {
+    for (const message of msg.messages || []) acceptChatMessage(message, { toast: false });
+    if (chatDrawerOpen()) renderChatLog();
+  } else if (msg.t === "voice-roster") {
+    applyVoiceRoster(msg.entries);
   } else if (msg.t === "host-exiting") {
     beginHostHandoff("Host left. Rejoining...");
   } else if (msg.t === "host-relinquish") {
@@ -1697,6 +2260,7 @@ function wirePageLifecycle() {
   window.addEventListener("pagehide", () => destroyPeerForPageExit("pagehide"), { capture: true });
   window.addEventListener("beforeunload", () => destroyPeerForPageExit("beforeunload"), { capture: true });
   document.addEventListener("freeze", () => destroyPeerForPageExit("freeze"));
+  wireVoiceVisibility();
   document.addEventListener("visibilitychange", () => {
     if (!net.isHost) return;
     if (document.hidden) {
