@@ -468,9 +468,17 @@ input, textarea, select {
 }
 
 /* ===== Play screen ===== */
-#screen-play { padding: 0; justify-content: flex-start; position: relative; gap:0; }
+#screen-play {
+  padding: 0;
+  justify-content: flex-start;
+  position: relative;
+  gap: 0;
+  height: 100%;
+  overflow: hidden;
+}
 #game-select > option {color:black;}
 #stage {
+    display: block;
     width: 100%;
     flex: 1;
     min-height: 0;
