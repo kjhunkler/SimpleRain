@@ -551,6 +551,9 @@ const voice = {
   on: false,
   pending: false,
   stream: null,
+  muted: false,
+  silentAudioCtx: null,
+  silentSource: null,
   joinedAt: 0,
   roster: new Map(), // appId -> { id, peerId, joinedAt }
   calls: new Map(), // appId -> MediaConnection
@@ -560,6 +563,35 @@ const voice = {
   levelTimer: null,
   keepAliveTimer: null,
 };
+
+function createSilentVoiceStream() {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) throw new Error("AudioContext unavailable");
+  const ctx = new AudioCtx();
+  const dest = ctx.createMediaStreamDestination();
+  const gain = ctx.createGain();
+  const source = ctx.createOscillator();
+  gain.gain.value = 0;
+  source.connect(gain);
+  gain.connect(dest);
+  source.start();
+  if (ctx.state === "suspended") ctx.resume().catch(() => {});
+  voice.silentAudioCtx = ctx;
+  voice.silentSource = source;
+  return dest.stream;
+}
+
+function stopSilentVoiceStream() {
+  if (voice.silentSource) {
+    try { voice.silentSource.stop(); } catch {}
+    try { voice.silentSource.disconnect(); } catch {}
+    voice.silentSource = null;
+  }
+  if (voice.silentAudioCtx) {
+    voice.silentAudioCtx.close().catch(() => {});
+    voice.silentAudioCtx = null;
+  }
+}
 
 function voiceRosterMessage() {
   return { t: "voice-roster", entries: [...voice.roster.values()] };
@@ -591,21 +623,27 @@ async function joinVoice() {
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       video: false,
     });
+    voice.muted = false;
   } catch {
-    voice.pending = false;
-    updateVoiceButton();
-    setStatus("Microphone unavailable. Check browser permissions.");
-    return;
+    try {
+      voice.stream = createSilentVoiceStream();
+      voice.muted = true;
+    } catch {
+      voice.pending = false;
+      updateVoiceButton();
+      setStatus("Voice chat unavailable. Check browser permissions.");
+      return;
+    }
   }
   voice.pending = false;
   voice.on = true;
   voice.joinedAt = Date.now();
-  attachSpeakingAnalyser(MY_ID, voice.stream);
+  if (!voice.muted) attachSpeakingAnalyser(MY_ID, voice.stream);
   announceVoiceState(true);
   startVoiceLevelLoop();
   startVoiceKeepAlive();
   updateVoiceButton();
-  setStatus("Voice chat on.");
+  setStatus(voice.muted ? "Voice chat on. You are muted." : "Voice chat on.");
 }
 
 function leaveVoice(silent = false) {
@@ -616,6 +654,8 @@ function leaveVoice(silent = false) {
     for (const track of voice.stream.getTracks()) { try { track.stop(); } catch {} }
     voice.stream = null;
   }
+  stopSilentVoiceStream();
+  voice.muted = false;
   for (const call of voice.calls.values()) { try { call.close(); } catch {} }
   voice.calls.clear();
   for (const audio of voice.audios.values()) detachVoiceAudio(audio);
@@ -772,7 +812,7 @@ function restoreVoiceAfterReconnect() {
   }
   voice.audios.clear();
   voice.speaking.clear();
-  attachSpeakingAnalyser(MY_ID, voice.stream);
+  if (!voice.muted) attachSpeakingAnalyser(MY_ID, voice.stream);
   if (net.isHost) voice.roster = new Map([[MY_ID, { id: MY_ID, peerId: net.peer?.id || "", joinedAt: voice.joinedAt }]]);
   announceVoiceState(true);
   renderSpeakingIndicators();
