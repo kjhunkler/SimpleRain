@@ -1,6 +1,6 @@
 /* SimpleChess.
- * Phase 2: pond-styled chess board with a pan/zoom/rotate camera that matches
- * the SimpleRain feel. Detailed pieces and interaction arrive in later phases.
+ * Phase 3: detailed vector piece sets with snappy pickup/placement on the
+ * pond-styled camera board. Rules, seats, and turn order arrive in later phases.
  */
 (function () {
   "use strict";
@@ -9,8 +9,8 @@
   const SNAPSHOT_HEARTBEAT_MS = 2500;
   const MAX_RIPPLES = 28;
   const FILES = "abcdefgh";
-  const GLYPHS = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
   const START_ROWS = ["rnbqkbnr", "pppppppp", "", "", "", "", "PPPPPPPP", "RNBQKBNR"];
+  const PIECE_NAMES = { k: "king", q: "queen", r: "rook", b: "bishop", n: "knight", p: "pawn" };
   const LIGHT_SQUARE = "#dce6c4";
   const DARK_SQUARE = "#356b78";
   const FRAME_WOOD = "#4a3a2c";
@@ -18,12 +18,285 @@
   const LABEL_COLOR = "#e8dfc8";
   const MIN_ZOOM = 0.55;
   const MAX_ZOOM = 3.2;
+  const SPRITE_UNIT_W = 100;
+  const SPRITE_UNIT_H = 122;
+  const SPRITE_SCALE = 2.6;
 
   function now() { return performance.now(); }
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function seeded(seed, i) {
     const x = Math.sin(seed * 127.1 + i * 311.7) * 43758.5453;
     return x - Math.floor(x);
+  }
+
+  function startingBoard() {
+    const board = new Array(64).fill("");
+    for (let row = 0; row < 8; row++) {
+      const rowStr = START_ROWS[row];
+      for (let col = 0; col < rowStr.length; col++) board[row * 8 + col] = rowStr[col];
+    }
+    return board;
+  }
+
+  function isWhitePiece(letter) { return letter === letter.toUpperCase(); }
+  function squareName(idx) { return FILES[idx % 8] + String(8 - Math.floor(idx / 8)); }
+
+  // ---- piece sprites ------------------------------------------------------
+  // Pieces are drawn once per letter into an offscreen canvas (100x122 unit
+  // box, base line at y=112) and scaled onto the board every frame.
+
+  const spriteCache = new Map();
+
+  function pieceSprite(letter) {
+    let sprite = spriteCache.get(letter);
+    if (!sprite) {
+      sprite = renderPieceSprite(letter);
+      spriteCache.set(letter, sprite);
+    }
+    return sprite;
+  }
+
+  function renderPieceSprite(letter) {
+    const cv = document.createElement("canvas");
+    cv.width = Math.round(SPRITE_UNIT_W * SPRITE_SCALE);
+    cv.height = Math.round(SPRITE_UNIT_H * SPRITE_SCALE);
+    const c = cv.getContext("2d");
+    c.scale(SPRITE_SCALE, SPRITE_SCALE);
+    c.lineJoin = "round";
+    c.lineCap = "round";
+    drawPieceArt(c, letter.toLowerCase(), isWhitePiece(letter));
+    return cv;
+  }
+
+  function piecePalette(white) {
+    return white
+      ? { top: "#faf4e2", bottom: "#d6c9a2", line: "#41372a", detail: "rgba(65, 55, 42, 0.55)", rim: "rgba(255, 252, 240, 0.85)" }
+      : { top: "#41586d", bottom: "#131e28", line: "#0a1118", detail: "rgba(185, 214, 234, 0.42)", rim: "rgba(185, 214, 234, 0.55)" };
+  }
+
+  function shapeDone(c, pal, y0, y1) {
+    const g = c.createLinearGradient(32, y0, 72, y1);
+    g.addColorStop(0, pal.top);
+    g.addColorStop(1, pal.bottom);
+    c.fillStyle = g;
+    c.fill();
+    c.lineWidth = 3.4;
+    c.strokeStyle = pal.line;
+    c.stroke();
+  }
+
+  function drawGloss(c, pal, x, y, r) {
+    const g = c.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, pal.rim);
+    g.addColorStop(1, "rgba(255, 255, 255, 0)");
+    c.fillStyle = g;
+    c.beginPath();
+    c.arc(x, y, r, 0, Math.PI * 2);
+    c.fill();
+  }
+
+  function drawBase(c, pal) {
+    c.beginPath();
+    c.moveTo(20, 100);
+    c.quadraticCurveTo(50, 92, 80, 100);
+    c.quadraticCurveTo(85, 106, 80, 111);
+    c.quadraticCurveTo(50, 117, 20, 111);
+    c.quadraticCurveTo(15, 106, 20, 100);
+    shapeDone(c, pal, 92, 117);
+  }
+
+  function drawPawnArt(c, pal) {
+    drawBase(c, pal);
+    c.beginPath();
+    c.moveTo(36, 100);
+    c.quadraticCurveTo(40, 72, 43, 58);
+    c.lineTo(57, 58);
+    c.quadraticCurveTo(60, 72, 64, 100);
+    c.closePath();
+    shapeDone(c, pal, 58, 100);
+    c.beginPath();
+    c.ellipse(50, 57, 13, 5, 0, 0, Math.PI * 2);
+    shapeDone(c, pal, 52, 62);
+    c.beginPath();
+    c.arc(50, 40, 14, 0, Math.PI * 2);
+    shapeDone(c, pal, 26, 54);
+    drawGloss(c, pal, 45, 34, 6);
+  }
+
+  function drawRookArt(c, pal) {
+    drawBase(c, pal);
+    c.beginPath();
+    c.moveTo(35, 100);
+    c.lineTo(38, 54);
+    c.lineTo(62, 54);
+    c.lineTo(65, 100);
+    c.closePath();
+    shapeDone(c, pal, 54, 100);
+    c.beginPath();
+    c.moveTo(31, 54);
+    c.lineTo(31, 26);
+    c.lineTo(41, 26);
+    c.lineTo(41, 34);
+    c.lineTo(46, 34);
+    c.lineTo(46, 26);
+    c.lineTo(54, 26);
+    c.lineTo(54, 34);
+    c.lineTo(59, 34);
+    c.lineTo(59, 26);
+    c.lineTo(69, 26);
+    c.lineTo(69, 54);
+    c.closePath();
+    shapeDone(c, pal, 26, 54);
+    c.strokeStyle = pal.detail;
+    c.lineWidth = 2.6;
+    c.beginPath();
+    c.moveTo(50, 64);
+    c.lineTo(50, 78);
+    c.stroke();
+    drawGloss(c, pal, 43, 32, 6);
+  }
+
+  function drawKnightArt(c, pal) {
+    drawBase(c, pal);
+    c.beginPath();
+    c.moveTo(33, 100);
+    c.quadraticCurveTo(30, 78, 36, 58);
+    c.quadraticCurveTo(28, 56, 21, 48);
+    c.quadraticCurveTo(17, 43, 19, 38);
+    c.quadraticCurveTo(26, 33, 35, 30);
+    c.lineTo(40, 17);
+    c.lineTo(46, 27);
+    c.lineTo(54, 16);
+    c.lineTo(57, 28);
+    c.quadraticCurveTo(68, 38, 69, 56);
+    c.quadraticCurveTo(70, 78, 67, 100);
+    c.closePath();
+    shapeDone(c, pal, 16, 100);
+    c.fillStyle = pal.line;
+    c.beginPath();
+    c.arc(33, 40, 2.3, 0, Math.PI * 2);
+    c.fill();
+    c.beginPath();
+    c.arc(23, 42, 1.6, 0, Math.PI * 2);
+    c.fill();
+    c.strokeStyle = pal.detail;
+    c.lineWidth = 2.6;
+    c.beginPath();
+    c.moveTo(58, 34);
+    c.quadraticCurveTo(63, 48, 61, 62);
+    c.moveTo(61, 44);
+    c.quadraticCurveTo(65, 58, 63, 74);
+    c.stroke();
+    drawGloss(c, pal, 42, 34, 7);
+  }
+
+  function drawBishopArt(c, pal) {
+    drawBase(c, pal);
+    c.beginPath();
+    c.moveTo(37, 100);
+    c.quadraticCurveTo(42, 76, 44, 62);
+    c.lineTo(56, 62);
+    c.quadraticCurveTo(58, 76, 63, 100);
+    c.closePath();
+    shapeDone(c, pal, 62, 100);
+    c.beginPath();
+    c.ellipse(50, 61, 12, 4.6, 0, 0, Math.PI * 2);
+    shapeDone(c, pal, 56, 66);
+    c.beginPath();
+    c.moveTo(50, 20);
+    c.quadraticCurveTo(64, 32, 62, 46);
+    c.quadraticCurveTo(60, 56, 50, 58);
+    c.quadraticCurveTo(40, 56, 38, 46);
+    c.quadraticCurveTo(36, 32, 50, 20);
+    shapeDone(c, pal, 20, 58);
+    c.strokeStyle = pal.detail;
+    c.lineWidth = 2.6;
+    c.beginPath();
+    c.moveTo(53, 28);
+    c.lineTo(44, 44);
+    c.stroke();
+    c.beginPath();
+    c.arc(50, 14, 4.4, 0, Math.PI * 2);
+    shapeDone(c, pal, 10, 19);
+    drawGloss(c, pal, 45, 32, 6);
+  }
+
+  function drawQueenArt(c, pal) {
+    drawBase(c, pal);
+    c.beginPath();
+    c.moveTo(33, 100);
+    c.quadraticCurveTo(40, 76, 43, 58);
+    c.lineTo(57, 58);
+    c.quadraticCurveTo(60, 76, 67, 100);
+    c.closePath();
+    shapeDone(c, pal, 58, 100);
+    c.beginPath();
+    c.ellipse(50, 57, 13, 4.8, 0, 0, Math.PI * 2);
+    shapeDone(c, pal, 52, 62);
+    c.beginPath();
+    c.moveTo(36, 54);
+    c.lineTo(30, 24);
+    c.lineTo(41, 38);
+    c.lineTo(50, 18);
+    c.lineTo(59, 38);
+    c.lineTo(70, 24);
+    c.lineTo(64, 54);
+    c.closePath();
+    shapeDone(c, pal, 18, 54);
+    for (const [px, py] of [[30, 24], [50, 18], [70, 24]]) {
+      c.beginPath();
+      c.arc(px, py, 3.2, 0, Math.PI * 2);
+      shapeDone(c, pal, py - 3, py + 3);
+    }
+    drawGloss(c, pal, 44, 36, 7);
+  }
+
+  function drawKingArt(c, pal) {
+    drawBase(c, pal);
+    c.beginPath();
+    c.moveTo(33, 100);
+    c.quadraticCurveTo(40, 76, 43, 56);
+    c.lineTo(57, 56);
+    c.quadraticCurveTo(60, 76, 67, 100);
+    c.closePath();
+    shapeDone(c, pal, 56, 100);
+    c.beginPath();
+    c.ellipse(50, 55, 13, 4.8, 0, 0, Math.PI * 2);
+    shapeDone(c, pal, 50, 60);
+    c.beginPath();
+    c.moveTo(37, 52);
+    c.quadraticCurveTo(34, 38, 38, 30);
+    c.lineTo(62, 30);
+    c.quadraticCurveTo(66, 38, 63, 52);
+    c.closePath();
+    shapeDone(c, pal, 30, 52);
+    c.strokeStyle = pal.line;
+    c.lineWidth = 5.4;
+    c.beginPath();
+    c.moveTo(50, 8);
+    c.lineTo(50, 26);
+    c.moveTo(43, 15);
+    c.lineTo(57, 15);
+    c.stroke();
+    c.strokeStyle = pal.top;
+    c.lineWidth = 2.4;
+    c.beginPath();
+    c.moveTo(50, 8);
+    c.lineTo(50, 26);
+    c.moveTo(43, 15);
+    c.lineTo(57, 15);
+    c.stroke();
+    drawGloss(c, pal, 44, 36, 7);
+  }
+
+  function drawPieceArt(c, type, white) {
+    const pal = piecePalette(white);
+    if (type === "p") drawPawnArt(c, pal);
+    else if (type === "r") drawRookArt(c, pal);
+    else if (type === "n") drawKnightArt(c, pal);
+    else if (type === "b") drawBishopArt(c, pal);
+    else if (type === "q") drawQueenArt(c, pal);
+    else drawKingArt(c, pal);
   }
 
   function create(host, initialState) {
@@ -38,6 +311,11 @@
     let lastTapAt = 0;
     let boardGesture = null;
     let ripples = [];
+    let drag = null;
+    let dropAnim = null;
+    let glides = [];
+    let sinks = [];
+    let audioCtx = null;
     let state = defaultState();
     const view = { zoom: 1, rot: 0, panX: 0, panY: 0 };
     const activePointers = new Map();
@@ -49,7 +327,7 @@
         game: GAME_ID,
         rev: 0,
         createdAt: Date.now(),
-        rows: [...START_ROWS],
+        board: startingBoard(),
         message: "The pond settles into sixty-four squares.",
       };
     }
@@ -61,19 +339,122 @@
     }
 
     function makeSnapshot() {
-      return { ...state, full: true };
+      return { ...state, board: state.board.slice(), full: true };
     }
 
     function applySnapshot(snapshot) {
       if (!snapshot || snapshot.game !== GAME_ID) return;
+      const before = Array.isArray(state.board) && state.board.length === 64 ? state.board.slice() : null;
       state = { ...defaultState(), ...snapshot };
-      if (!Array.isArray(state.rows) || state.rows.length !== 8) state.rows = [...START_ROWS];
+      if (!Array.isArray(state.board) || state.board.length !== 64) state.board = startingBoard();
+      state.board = state.board.map((cell) => (typeof cell === "string" && /^[prnbqk]$/i.test(cell) ? cell : ""));
+      if (before) spawnMoveAnimations(before, state.board);
+    }
+
+    function spawnMoveAnimations(before, after) {
+      if (drag || dropAnim) return;
+      const vacated = [];
+      const appeared = [];
+      for (let i = 0; i < 64; i++) {
+        if (before[i] === after[i]) continue;
+        if (before[i] && !after[i]) vacated.push(i);
+        if (after[i] && before[i] !== after[i]) appeared.push(i);
+      }
+      if (!appeared.length) return;
+      if (appeared.length > 6) { glides = []; sinks = []; return; }
+      let moved = false;
+      for (const to of appeared) {
+        const letter = after[to];
+        const fromPos = vacated.findIndex((idx) => before[idx] === letter);
+        if (fromPos < 0) continue;
+        const from = vacated.splice(fromPos, 1)[0];
+        glides.push({ letter, from, to, start: now(), dur: 200 });
+        if (before[to]) sinks.push({ letter: before[to], idx: to, start: now(), dur: 260 });
+        moved = true;
+        if (glides.length >= 6) break;
+      }
+      if (moved) playSound(sinks.length ? "capture" : "place", 0.55);
     }
 
     function handleAction(id, input) {
       if (!isHost() || !input || typeof input !== "object") return;
       if (input.type === "reset") resetHostState();
+      else if (input.type === "move") {
+        const from = input.from | 0;
+        const to = input.to | 0;
+        const letter = state.board[from];
+        const captured = state.board[to];
+        applyMove(from, to);
+        if (id !== host.myId && letter && state.board[to] === letter) {
+          glides.push({ letter, from, to, start: now(), dur: 200 });
+          if (captured) sinks.push({ letter: captured, idx: to, start: now(), dur: 260 });
+          playSound(captured ? "capture" : "place", 0.55);
+        }
+      }
       host.broadcastState(makeSnapshot());
+    }
+
+    function applyMove(from, to) {
+      if (from < 0 || from > 63 || to < 0 || to > 63 || from === to) return;
+      const letter = state.board[from];
+      if (!letter) return;
+      const captured = state.board[to];
+      state.board[to] = letter;
+      state.board[from] = "";
+      state.rev = (state.rev || 0) + 1;
+      const color = isWhitePiece(letter) ? "White" : "Black";
+      state.message = captured
+        ? `${color} ${PIECE_NAMES[letter.toLowerCase()]} takes on ${squareName(to)}.`
+        : `${color} ${PIECE_NAMES[letter.toLowerCase()]} glides to ${squareName(to)}.`;
+    }
+
+    function sendMove(from, to) {
+      if (isHost()) {
+        handleAction(host.myId, { type: "move", from, to });
+      } else {
+        applyMove(from, to);
+        host.sendInput({ type: "move", from, to });
+      }
+    }
+
+    function playSound(kind, gainMul = 1) {
+      try {
+        audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+        const t = audioCtx.currentTime;
+        const tones = {
+          pickup: [[520, 0.09, 0.020], [700, 0.12, 0.012]],
+          place: [[330, 0.10, 0.026], [440, 0.16, 0.018]],
+          capture: [[220, 0.16, 0.030], [160, 0.22, 0.024], [440, 0.10, 0.012]],
+          reset: [[260, 0.18, 0.020], [390, 0.24, 0.018]],
+        };
+        for (const [freq, dur, vol] of tones[kind] || tones.place) {
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(freq, t);
+          osc.frequency.exponentialRampToValueAtTime(freq * 0.82, t + dur);
+          gain.gain.setValueAtTime(vol * gainMul, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.start(t);
+          osc.stop(t + dur);
+        }
+      } catch {}
+    }
+
+    function easeOutCubic(t) { return 1 - Math.pow(1 - clamp(t, 0, 1), 3); }
+
+    function squareIndexAt(bx, by) {
+      const col = Math.floor(bx);
+      const row = Math.floor(by);
+      if (col < 0 || col > 7 || row < 0 || row > 7) return -1;
+      return row * 8 + col;
+    }
+
+    function squareCenter(idx) {
+      return { x: (idx % 8) + 0.5, y: Math.floor(idx / 8) + 0.5 };
     }
 
     function resize() {
@@ -188,12 +569,24 @@
     }
 
     function onPointerDown(e) {
+      if (drag) { e.preventDefault(); return; }
       const p = pointerPoint(e);
       const pointerId = e.pointerId ?? "mouse";
-      activePointers.set(pointerId, { x: p.x, y: p.y });
       e.preventDefault();
-      if (e.pointerId !== undefined) canvas.setPointerCapture?.(e.pointerId);
       const b = screenToBoard(p.x, p.y);
+      const idx = squareIndexAt(b.x, b.y);
+      const letter = idx >= 0 ? state.board[idx] : "";
+      if (letter && !activePointers.size && !dropAnim) {
+        if (e.pointerId !== undefined) canvas.setPointerCapture?.(e.pointerId);
+        const touch = (e.pointerType || (e.touches ? "touch" : "mouse")) === "touch";
+        drag = { pointerId, letter, from: idx, bx: b.x, by: b.y, start: now(), lift: touch ? 0.52 : 0.14 };
+        addRipple(b.x, b.y);
+        playSound("pickup");
+        lastTapAt = 0;
+        return;
+      }
+      activePointers.set(pointerId, { x: p.x, y: p.y });
+      if (e.pointerId !== undefined) canvas.setPointerCapture?.(e.pointerId);
       addRipple(b.x, b.y);
       if (activePointers.size === 1 && (!e.touches || e.touches.length <= 1)) {
         const t = now();
@@ -207,6 +600,14 @@
 
     function onPointerMove(e) {
       const pointerId = e.pointerId ?? "mouse";
+      if (drag && pointerId === drag.pointerId) {
+        e.preventDefault();
+        const p = pointerPoint(e);
+        const b = screenToBoard(p.x, p.y);
+        drag.bx = b.x;
+        drag.by = b.y;
+        return;
+      }
       if (!activePointers.has(pointerId)) return;
       activePointers.set(pointerId, pointerPoint(e));
       updateBoardGesture();
@@ -214,15 +615,47 @@
     }
 
     function onPointerUp(e) {
-      activePointers.delete(e.pointerId ?? "mouse");
+      const pointerId = e.pointerId ?? "mouse";
+      if (drag && pointerId === drag.pointerId) {
+        e.preventDefault();
+        finishDrag(true);
+        if (e.pointerId !== undefined && canvas.hasPointerCapture?.(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+        return;
+      }
+      activePointers.delete(pointerId);
       if (e.pointerId !== undefined && canvas.hasPointerCapture?.(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
       if (!activePointers.size) boardGesture = null;
       else startBoardGesture();
     }
 
     function onLostPointerCapture(e) {
-      activePointers.delete(e.pointerId ?? "mouse");
+      const pointerId = e.pointerId ?? "mouse";
+      if (drag && pointerId === drag.pointerId) { finishDrag(false); return; }
+      activePointers.delete(pointerId);
       if (!activePointers.size) boardGesture = null;
+    }
+
+    function dragLift(ts) {
+      if (!drag) return 0;
+      return drag.lift * easeOutCubic((ts - drag.start) / 130);
+    }
+
+    function finishDrag(commit) {
+      if (!drag) return;
+      const held = drag;
+      drag = null;
+      const lift = held.lift * easeOutCubic((now() - held.start) / 130);
+      const dropX = held.bx;
+      const dropY = held.by - lift;
+      const target = commit ? squareIndexAt(dropX, dropY) : -1;
+      const canMove = target >= 0 && target !== held.from && !!state.board[held.from];
+      const to = canMove ? target : held.from;
+      const captured = canMove ? state.board[to] : "";
+      dropAnim = { letter: held.letter, to, x0: dropX, y0: dropY, start: now(), dur: 150, captured: !!captured };
+      if (canMove) {
+        if (captured) sinks.push({ letter: captured, idx: to, start: now(), dur: 260 });
+        sendMove(held.from, to);
+      }
     }
 
     function onWheel(e) {
@@ -242,6 +675,7 @@
       if (e.key === "q" || e.key === "Q") { e.preventDefault(); view.rot -= Math.PI / 12; }
       else if (e.key === "e" || e.key === "E") { e.preventDefault(); view.rot += Math.PI / 12; }
       else if (e.key === "0") { e.preventDefault(); resetView(); }
+      else if (e.key === "Escape" && drag) { e.preventDefault(); finishDrag(false); }
     }
 
     // ---- pond ambiance ----------------------------------------------------
@@ -413,34 +847,135 @@
       ctx.fillRect(-4 * s, -4 * s, 8 * s, 8 * s);
     }
 
-    function drawPiece(glyph, isWhite, cx, cy, cell) {
-      ctx.beginPath();
-      ctx.ellipse(cx, cy + cell * 0.3, cell * 0.3, cell * 0.09, 0, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(6, 16, 22, 0.24)";
-      ctx.fill();
-      ctx.font = `${Math.round(cell * 0.78)}px "Segoe UI Symbol", system-ui, sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.lineJoin = "round";
-      ctx.lineWidth = Math.max(1.5, cell * 0.05);
-      ctx.strokeStyle = isWhite ? "rgba(24, 36, 46, 0.72)" : "rgba(226, 240, 248, 0.5)";
-      ctx.strokeText(glyph, cx, cy);
-      ctx.fillStyle = isWhite ? "#f2ecd8" : "#1f2d38";
-      ctx.fillText(glyph, cx, cy);
+    function drawSquareGlow(idx, style, width) {
+      const s = cellPx();
+      const col = idx % 8;
+      const row = Math.floor(idx / 8);
+      ctx.strokeStyle = style;
+      ctx.lineWidth = width;
+      ctx.strokeRect((col - 4) * s + width / 2, (row - 4) * s + width / 2, s - width, s - width);
     }
 
-    function drawPieces() {
-      const s = cellPx();
-      const rows = state.rows || START_ROWS;
-      for (let row = 0; row < 8; row++) {
-        const pieces = rows[row] || "";
-        for (let col = 0; col < pieces.length; col++) {
-          const letter = pieces[col];
-          const glyph = GLYPHS[letter.toLowerCase()];
-          if (!glyph) continue;
-          drawPiece(glyph, letter === letter.toUpperCase(), (col - 3.5) * s, (row - 3.5) * s - s * 0.03, s);
-        }
+    function drawHighlights(ts) {
+      if (!drag) return;
+      const lift = dragLift(ts);
+      const idx = squareIndexAt(drag.bx, drag.by - lift);
+      drawSquareGlow(drag.from, "rgba(180, 226, 244, 0.5)", Math.max(1.6, cellPx() * 0.045));
+      if (idx >= 0 && idx !== drag.from) {
+        const pulse = 0.62 + Math.sin(ts * 0.012) * 0.18;
+        drawSquareGlow(idx, `rgba(140, 232, 188, ${pulse.toFixed(3)})`, Math.max(2, cellPx() * 0.07));
       }
+    }
+
+    function drawPieceShadow(bx, by, s, scale, lift) {
+      const px = (bx - 4) * s;
+      const py = (by - 4) * s;
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.rotate(-view.rot);
+      ctx.beginPath();
+      ctx.ellipse(0, s * 0.34, s * 0.30 * scale * (1 + lift * 0.4), s * 0.10 * scale, 0, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(6, 16, 22, ${(0.26 / (1 + lift * 1.6)).toFixed(3)})`;
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawPieceSprite(letter, bx, by, scale = 1, alpha = 1) {
+      const s = cellPx();
+      const sprite = pieceSprite(letter);
+      const dw = s * 1.04 * scale;
+      const dh = dw * (SPRITE_UNIT_H / SPRITE_UNIT_W);
+      const px = (bx - 4) * s;
+      const py = (by - 4) * s;
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.rotate(-view.rot);
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(sprite, -dw / 2, s * 0.36 - dh * (112 / SPRITE_UNIT_H), dw, dh);
+      ctx.restore();
+    }
+
+    function drawSinks(ts) {
+      const keep = [];
+      for (const sink of sinks) {
+        const t = (ts - sink.start) / sink.dur;
+        if (t >= 1) continue;
+        keep.push(sink);
+        const c = squareCenter(sink.idx);
+        const ease = easeOutCubic(t);
+        drawPieceSprite(sink.letter, c.x, c.y + ease * 0.22, 1 - ease * 0.34, 1 - ease);
+      }
+      sinks = keep;
+    }
+
+    function drawPieces(ts) {
+      const s = cellPx();
+      const skip = new Set();
+      if (drag) skip.add(drag.from);
+      if (dropAnim) skip.add(dropAnim.to);
+      for (const g of glides) skip.add(g.to);
+      for (let idx = 0; idx < 64; idx++) {
+        const letter = state.board[idx];
+        if (!letter || skip.has(idx)) continue;
+        const c = squareCenter(idx);
+        drawPieceShadow(c.x, c.y, s, 1, 0);
+        drawPieceSprite(letter, c.x, c.y);
+      }
+    }
+
+    function drawGlides(ts) {
+      const s = cellPx();
+      const keep = [];
+      for (const g of glides) {
+        const t = (ts - g.start) / g.dur;
+        const from = squareCenter(g.from);
+        const to = squareCenter(g.to);
+        if (t >= 1) {
+          addRipple(to.x, to.y, true);
+          drawPieceShadow(to.x, to.y, s, 1, 0);
+          drawPieceSprite(g.letter, to.x, to.y);
+          continue;
+        }
+        keep.push(g);
+        const ease = easeOutCubic(t);
+        const bx = from.x + (to.x - from.x) * ease;
+        const by = from.y + (to.y - from.y) * ease;
+        const hop = Math.sin(Math.PI * ease) * 0.16;
+        drawPieceShadow(bx, by, s, 1, hop);
+        drawPieceSprite(g.letter, bx, by - hop, 1 + hop * 0.4);
+      }
+      glides = keep;
+    }
+
+    function drawDropAnim(ts) {
+      if (!dropAnim) return;
+      const s = cellPx();
+      const t = (ts - dropAnim.start) / dropAnim.dur;
+      const to = squareCenter(dropAnim.to);
+      if (t >= 1) {
+        addRipple(to.x, to.y);
+        playSound(dropAnim.captured ? "capture" : "place");
+        const letter = dropAnim.letter;
+        dropAnim = null;
+        drawPieceShadow(to.x, to.y, s, 1, 0);
+        drawPieceSprite(letter, to.x, to.y);
+        return;
+      }
+      const ease = easeOutCubic(t);
+      const bx = dropAnim.x0 + (to.x - dropAnim.x0) * ease;
+      const by = dropAnim.y0 + (to.y - dropAnim.y0) * ease;
+      const scale = 1.12 - ease * 0.12;
+      drawPieceShadow(bx, by, s, scale, 1 - ease);
+      drawPieceSprite(dropAnim.letter, bx, by, scale);
+    }
+
+    function drawDragPiece(ts) {
+      if (!drag) return;
+      const s = cellPx();
+      const lift = dragLift(ts);
+      const wob = Math.sin(ts * 0.006) * 0.012;
+      drawPieceShadow(drag.bx, drag.by, s, 1.12, lift + 0.2);
+      drawPieceSprite(drag.letter, drag.bx + wob, drag.by - lift, 1.14);
     }
 
     function drawBanner() {
@@ -451,7 +986,7 @@
       ctx.fillText(state.message || "", W / 2, H - 64);
       ctx.fillStyle = "rgba(199, 222, 234, 0.62)";
       ctx.font = "600 12px system-ui, sans-serif";
-      ctx.fillText("Drag to pan · pinch or scroll to zoom · double-tap the water to recentre", W / 2, H - 42);
+      ctx.fillText("Drag a piece to move it · drag the water to pan · pinch or scroll to zoom", W / 2, H - 42);
     }
 
     function loop(ts) {
@@ -464,7 +999,12 @@
         drawPads(ts);
         drawFrame();
         drawSquares();
-        drawPieces();
+        drawHighlights(ts);
+        drawSinks(ts);
+        drawPieces(ts);
+        drawGlides(ts);
+        drawDropAnim(ts);
+        drawDragPiece(ts);
       });
       drawVignette();
       drawBanner();
