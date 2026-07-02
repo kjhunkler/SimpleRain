@@ -1,6 +1,6 @@
 /* SimpleRain app shell: auto host/join, profile editing, host-owned game state. */
 
-const APP_VERSION = "1.5.5";
+const APP_VERSION = "1.5.6";
 const AUTO_CHANNEL = "simple-rain";
 const GAME_SAVE_KEY = "simplerain-host-cache";
 const MUSIC_MUTED_KEY = "simplerain-music-muted";
@@ -2548,9 +2548,9 @@ function syncCanvasSize() {
 }
 
 function drawLoadingFrame() {
+  if (activeGame) return;
   const rect = syncCanvasSize();
   ctx.clearRect(0, 0, rect.width, rect.height);
-  if (activeGame) return;
   const grad = ctx.createLinearGradient(0, 0, 0, rect.height);
   grad.addColorStop(0, "#10283a");
   grad.addColorStop(0.45, "#173d4d");
